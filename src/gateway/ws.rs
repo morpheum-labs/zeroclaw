@@ -149,8 +149,57 @@ pub async fn handle_ws_chat(
         .into_response()
 }
 
-/// Gateway session key prefix to avoid collisions with channel sessions.
-const GW_SESSION_PREFIX: &str = "gw_";
+/// Load gateway chat history + memory scope for `session_id`. Returns the backend session key.
+fn hydrate_gateway_ws_session(
+    agent: &mut crate::agent::Agent,
+    backend: &dyn crate::channels::session_backend::SessionBackend,
+    session_id: &str,
+    name_from_query: Option<&str>,
+) -> (String, bool, usize, Option<String>) {
+    let session_key = crate::agent::session_record::gateway_backend_key(session_id);
+    agent.clear_history();
+    agent.set_memory_session_id(Some(session_id.to_string()));
+    let messages = backend.load(&session_key);
+    let mut resumed = false;
+    let mut message_count = 0;
+    if !messages.is_empty() {
+        message_count = messages.len();
+        agent.seed_history(&messages);
+        resumed = true;
+    }
+    let mut effective_name = None;
+    if let Some(name) = name_from_query {
+        if !name.is_empty() {
+            let _ = backend.set_session_name(&session_key, name);
+            effective_name = Some(name.to_string());
+        }
+    }
+    if effective_name.is_none() {
+        effective_name = backend.get_session_name(&session_key).unwrap_or(None);
+    }
+    (session_key, resumed, message_count, effective_name)
+}
+
+async fn send_ws_session_start(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    session_id: &str,
+    resumed: bool,
+    message_count: usize,
+    effective_name: Option<&str>,
+) {
+    let mut session_start = serde_json::json!({
+        "type": "session_start",
+        "session_id": session_id,
+        "resumed": resumed,
+        "message_count": message_count,
+    });
+    if let Some(name) = effective_name {
+        session_start["name"] = serde_json::Value::String(name.to_string());
+    }
+    let _ = sender
+        .send(Message::Text(session_start.to_string().into()))
+        .await;
+}
 
 async fn handle_socket(
     socket: WebSocket,
@@ -161,8 +210,7 @@ async fn handle_socket(
     let (mut sender, mut receiver) = socket.split();
 
     // Resolve session ID: use provided or generate a new UUID
-    let session_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_key = format!("{GW_SESSION_PREFIX}{session_id}");
+    let mut session_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Build a persistent Agent for this connection so history is maintained across turns.
     let config = state.config.lock().clone();
@@ -187,45 +235,35 @@ async fn handle_socket(
             return;
         }
     };
-    agent.set_memory_session_id(Some(session_id.clone()));
 
     // Hydrate agent from persisted session (if available)
+    let mut session_key = crate::agent::session_record::gateway_backend_key(&session_id);
     let mut resumed = false;
     let mut message_count: usize = 0;
     let mut effective_name: Option<String> = None;
     if let Some(ref backend) = state.session_backend {
-        let messages = backend.load(&session_key);
-        if !messages.is_empty() {
-            message_count = messages.len();
-            agent.seed_history(&messages);
-            resumed = true;
-        }
-        // Set session name if provided (non-empty) on connect
-        if let Some(ref name) = session_name {
-            if !name.is_empty() {
-                let _ = backend.set_session_name(&session_key, name);
-                effective_name = Some(name.clone());
-            }
-        }
-        // If no name was provided via query param, load the stored name
-        if effective_name.is_none() {
-            effective_name = backend.get_session_name(&session_key).unwrap_or(None);
-        }
+        let (sk, res, mc, en) = hydrate_gateway_ws_session(
+            &mut agent,
+            backend.as_ref(),
+            &session_id,
+            session_name.as_deref(),
+        );
+        session_key = sk;
+        resumed = res;
+        message_count = mc;
+        effective_name = en;
+    } else {
+        agent.set_memory_session_id(Some(session_id.clone()));
     }
 
-    // Send session_start message to client
-    let mut session_start = serde_json::json!({
-        "type": "session_start",
-        "session_id": session_id,
-        "resumed": resumed,
-        "message_count": message_count,
-    });
-    if let Some(ref name) = effective_name {
-        session_start["name"] = serde_json::Value::String(name.clone());
-    }
-    let _ = sender
-        .send(Message::Text(session_start.to_string().into()))
-        .await;
+    send_ws_session_start(
+        &mut sender,
+        &session_id,
+        resumed,
+        message_count,
+        effective_name.as_deref(),
+    )
+    .await;
 
     // ── Optional connect handshake ──────────────────────────────────
     // The first message may be a `{"type":"connect",...}` frame carrying
@@ -246,9 +284,39 @@ async fn handle_socket(
                             capabilities = ?cp.capabilities,
                             "WebSocket connect params received"
                         );
-                        // Override session_id if provided in connect params
-                        if let Some(sid) = &cp.session_id {
-                            agent.set_memory_session_id(Some(sid.clone()));
+                        if let Some(sid) = cp
+                            .session_id
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            session_id = sid.to_string();
+                            if let Some(ref backend) = state.session_backend {
+                                let (sk, res, mc, en) = hydrate_gateway_ws_session(
+                                    &mut agent,
+                                    backend.as_ref(),
+                                    &session_id,
+                                    None,
+                                );
+                                session_key = sk;
+                                resumed = res;
+                                message_count = mc;
+                                effective_name = en;
+                            } else {
+                                session_key =
+                                    crate::agent::session_record::gateway_backend_key(&session_id);
+                                agent.clear_history();
+                                agent.set_memory_session_id(Some(session_id.clone()));
+                                agent.seed_history(&[]);
+                            }
+                            send_ws_session_start(
+                                &mut sender,
+                                &session_id,
+                                resumed,
+                                message_count,
+                                effective_name.as_deref(),
+                            )
+                            .await;
                         }
                         let ack = serde_json::json!({
                             "type": "connected",

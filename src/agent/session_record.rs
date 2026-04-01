@@ -2,10 +2,19 @@
 //!
 //! Interactive CLI persists to a JSON file; schema bumps allow migrations. Compaction archives
 //! live under `~/.zeroclaw/sessions/archives/` as JSONL lines of [`ChatMessage`].
+//!
+//! ## Session scope IDs (unified naming)
+//!
+//! - **CLI** — SQLite memory `session_id` filter: [`memory_session_id_for_cli_path`] → `cli:<path>`.
+//! - **Gateway WebSocket** — memory scope is the raw `session_id`; chat persistence uses
+//!   [`gateway_backend_key`] (prefix `gw_`) so gateway sessions do not collide with channel keys.
+//! - **Daemon channels** — `conversation_history_key` in `channels/mod.rs` (same string for JSONL/SQLite
+//!   session backend and for memory recall).
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -47,6 +56,66 @@ struct LegacySessionV1 {
 #[must_use]
 pub fn sessions_root_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.home_dir().join(".zeroclaw").join("sessions"))
+}
+
+/// Prefix for gateway WebSocket session rows in the workspace session backend (`gw_<session_id>`).
+pub const GATEWAY_SESSION_PREFIX: &str = "gw_";
+
+/// SQLite memory + transcript scope for the interactive CLI when a session file path is set.
+#[must_use]
+pub fn memory_session_id_for_cli_path(path: &Path) -> Option<String> {
+    let raw = path.to_string_lossy().trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(format!("cli:{raw}"))
+}
+
+/// Key used in the workspace session store (SQLite/JSONL) for gateway chat history.
+#[must_use]
+pub fn gateway_backend_key(session_id: &str) -> String {
+    format!("{GATEWAY_SESSION_PREFIX}{session_id}")
+}
+
+/// Delete `.jsonl` compaction archives under `archives_dir` with `modified` time older than `retention`.
+pub fn gc_compaction_archives_under(
+    archives_dir: &Path,
+    retention: Duration,
+) -> std::io::Result<usize> {
+    if !archives_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let cutoff = SystemTime::now()
+        .checked_sub(retention)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let mut removed = 0usize;
+    for entry in std::fs::read_dir(archives_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        if modified < cutoff && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Delete compaction archive files under `~/.zeroclaw/sessions/archives/` older than `retention`.
+/// Returns the number of files removed. No-op if `sessions_root_dir()` is unavailable.
+pub fn gc_compaction_archives_older_than(retention: Duration) -> std::io::Result<usize> {
+    let Some(root) = sessions_root_dir() else {
+        return Ok(0);
+    };
+    gc_compaction_archives_under(&root.join("archives"), retention)
 }
 
 fn ensure_system_prompt(history: &mut Vec<ChatMessage>, system_prompt: &str) {
@@ -167,5 +236,33 @@ mod tests {
             loaded.compaction.as_ref().unwrap().archive_paths,
             rec.compaction.as_ref().unwrap().archive_paths
         );
+    }
+
+    #[test]
+    fn gateway_backend_key_matches_prefix() {
+        assert_eq!(gateway_backend_key("abc-123"), "gw_abc-123");
+    }
+
+    #[test]
+    fn gc_archives_under_removes_only_expired_jsonl() {
+        use filetime::FileTime;
+        use std::time::Duration;
+        let dir = tempdir().unwrap();
+        let arch = dir.path().join("archives");
+        std::fs::create_dir_all(&arch).unwrap();
+        let stale = arch.join("stale.jsonl");
+        std::fs::write(&stale, b"{}\n").unwrap();
+        // Make file very old (before cutoff for 1-day retention)
+        let ancient = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let t = FileTime::from_system_time(ancient);
+        filetime::set_file_mtime(&stale, t).unwrap();
+
+        let fresh = arch.join("fresh.jsonl");
+        std::fs::write(&fresh, b"{}\n").unwrap();
+
+        let n = gc_compaction_archives_under(&arch, Duration::from_secs(60 * 60 * 24)).unwrap();
+        assert_eq!(n, 1);
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 }

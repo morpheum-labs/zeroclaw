@@ -1314,7 +1314,7 @@ pub async fn handle_api_session_delete(
             .into_response();
     };
 
-    let session_key = format!("gw_{id}");
+    let session_key = crate::agent::session_record::gateway_backend_key(&id);
     match backend.delete_session(&session_key) {
         Ok(true) => Json(serde_json::json!({"deleted": true, "session_id": id})).into_response(),
         Ok(false) => (
@@ -1358,7 +1358,7 @@ pub async fn handle_api_session_rename(
             .into_response();
     }
 
-    let session_key = format!("gw_{id}");
+    let session_key = crate::agent::session_record::gateway_backend_key(&id);
 
     // Verify the session exists before renaming
     let sessions = backend.list_sessions();

@@ -1473,6 +1473,11 @@ pub struct AgentConfig {
     /// Optional JSONL transcript of assistant replies (Phase 5 roadmap).
     #[serde(default)]
     pub session_transcript: SessionTranscriptConfig,
+
+    /// Delete compaction archives under `~/.zeroclaw/sessions/archives/` older than this many days.
+    /// `0` disables GC (default).
+    #[serde(default = "default_session_archive_retention_days")]
+    pub session_archive_retention_days: u32,
 }
 
 fn default_agent_max_tool_iterations() -> usize {
@@ -1492,6 +1497,10 @@ fn default_agent_tool_dispatcher() -> String {
 }
 
 fn default_max_system_prompt_chars() -> usize {
+    0
+}
+
+fn default_session_archive_retention_days() -> u32 {
     0
 }
 
@@ -1515,6 +1524,7 @@ impl Default for AgentConfig {
             dynamic_context: DynamicContextConfig::default(),
             tool_result_offload: ToolResultOffloadConfig::default(),
             session_transcript: SessionTranscriptConfig::default(),
+            session_archive_retention_days: default_session_archive_retention_days(),
         }
     }
 }

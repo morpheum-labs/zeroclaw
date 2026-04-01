@@ -185,4 +185,28 @@ mod tests {
         assert!(out.dynamic_block.contains("Repository (git)"));
         assert!(out.git_snapshot.is_some());
     }
+
+    #[test]
+    fn fingerprint_changes_when_instruction_file_is_updated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        let agents = ws.join("AGENTS.md");
+        std::fs::write(&agents, b"v1").unwrap();
+        let input_v1 = ContextAssemblyInput {
+            workspace: ws.clone(),
+            global_config_dir: None,
+            user_config_dir: None,
+            session_dir: None,
+            options: ContextAssemblyOptions::default(),
+        };
+        let fp1 = DefaultContextAssembler.fingerprint_only(&input_v1);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&agents, b"v2").unwrap();
+        let fp2 = DefaultContextAssembler.fingerprint_only(&input_v1);
+        assert_ne!(
+            fp1.0, fp2.0,
+            "dynamic context fingerprint must change when layered instructions change (resume safety)"
+        );
+    }
 }

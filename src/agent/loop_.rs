@@ -408,15 +408,6 @@ fn autosave_memory_key(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4())
 }
 
-fn memory_session_id_from_state_file(path: &Path) -> Option<String> {
-    let raw = path.to_string_lossy().trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-
-    Some(format!("cli:{raw}"))
-}
-
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
 fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
@@ -3996,7 +3987,7 @@ pub async fn run(
     let channel_name = if interactive { "cli" } else { "daemon" };
     let memory_session_id = session_state_file
         .as_deref()
-        .and_then(memory_session_id_from_state_file);
+        .and_then(crate::agent::session_record::memory_session_id_for_cli_path);
 
     // ── Execute ──────────────────────────────────────────────────
     let start = Instant::now();
@@ -4505,6 +4496,22 @@ pub async fn run(
 
             if let Some(path) = session_state_file.as_deref() {
                 save_interactive_session_history(path, &history, &compaction_meta)?;
+            }
+
+            if config.agent.session_archive_retention_days > 0 {
+                let retention = std::time::Duration::from_secs(
+                    u64::from(config.agent.session_archive_retention_days).saturating_mul(86400),
+                );
+                match crate::agent::session_record::gc_compaction_archives_older_than(retention) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!(
+                            removed = n,
+                            "Removed old session compaction archives (retention policy)"
+                        );
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Session archive GC failed"),
+                    _ => {}
+                }
             }
         }
     }

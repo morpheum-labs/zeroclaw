@@ -678,6 +678,19 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         None
     };
 
+    if config.agent.session_archive_retention_days > 0 {
+        let retention = std::time::Duration::from_secs(
+            u64::from(config.agent.session_archive_retention_days).saturating_mul(86400),
+        );
+        match crate::agent::session_record::gc_compaction_archives_older_than(retention) {
+            Ok(n) if n > 0 => {
+                tracing::info!("Removed {n} old home-directory session compaction archives");
+            }
+            Err(e) => tracing::warn!(error = %e, "Home session archive GC failed"),
+            _ => {}
+        }
+    }
+
     // ── Pairing guard ──────────────────────────────────────
     let pairing = Arc::new(PairingGuard::new(
         config.gateway.require_pairing,
