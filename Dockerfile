@@ -87,6 +87,10 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
         > /zeroclaw-data/.zeroclaw/config.toml && \
     chown -R 65534:65534 /zeroclaw-data
 
+# Dir copied into distroless release image as /zerobin (host can mount tools here)
+RUN mkdir -p /zeroclaw-image/zerobin && touch /zeroclaw-image/zerobin/.keep \
+    && chown -R 65534:65534 /zeroclaw-image/zerobin
+
 # ── Stage 2: Development Runtime (Debian) ────────────────────
 FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045e9a0d21712ae3ba AS dev
 
@@ -106,6 +110,9 @@ RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
 # Environment setup
 # Ensure UTF-8 locale so CJK / multibyte input is handled correctly
 ENV LANG=C.UTF-8
+# Dedicated folder so mounting host tools does NOT hide /usr/local/bin/zeroclaw
+RUN mkdir -p /zerobin && chown 65534:65534 /zerobin
+ENV PATH="/zerobin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/bin"
 # Use consistent workspace path
 ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
 ENV HOME=/zeroclaw-data
@@ -130,6 +137,9 @@ FROM gcr.io/distroless/cc-debian13:nonroot@sha256:84fcd3c223b144b0cb6edc5ecc7564
 
 COPY --from=builder /app/zeroclaw /usr/local/bin/zeroclaw
 COPY --from=builder /zeroclaw-data /zeroclaw-data
+# Distroless has no mkdir/shell; copy empty /zerobin from builder (host can mount extra tools here)
+COPY --from=builder /zeroclaw-image/zerobin /zerobin
+ENV PATH="/zerobin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/bin"
 
 # Environment setup
 # Ensure UTF-8 locale so CJK / multibyte input is handled correctly
