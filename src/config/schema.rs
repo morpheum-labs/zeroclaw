@@ -1513,10 +1513,6 @@ pub struct AgentConfig {
     #[serde(default)]
     pub history_pruning: crate::agent::history_pruner::HistoryPrunerConfig,
 
-    /// Enable context-aware tool filtering (only surface relevant tools per iteration).
-    #[serde(default)]
-    pub context_aware_tools: bool,
-
     /// Post-response quality evaluator configuration.
     #[serde(default)]
     pub eval: crate::agent::eval::EvalConfig,
@@ -1585,7 +1581,6 @@ impl Default for AgentConfig {
             max_system_prompt_chars: default_max_system_prompt_chars(),
             thinking: crate::agent::thinking::ThinkingConfig::default(),
             history_pruning: crate::agent::history_pruner::HistoryPrunerConfig::default(),
-            context_aware_tools: false,
             eval: crate::agent::eval::EvalConfig::default(),
             auto_classify: None,
             dynamic_context: DynamicContextConfig::default(),
@@ -15408,5 +15403,14 @@ auto_approve = ["file_read", "file_write", "file_edit", "memory_recall", "memory
                 "Docker config auto_approve missing expected tool: {tool}"
             );
         }
+    }
+
+    /// Reference template at `scripts/example-conf.toml` must stay in sync with `Config` serde.
+    #[test]
+    async fn example_reference_config_parses() {
+        const EXAMPLE: &str = include_str!("../../scripts/example-conf.toml");
+        let _: Config = toml::from_str(EXAMPLE).expect(
+            "scripts/example-conf.toml must deserialize into Config; update it when schema changes",
+        );
     }
 }
