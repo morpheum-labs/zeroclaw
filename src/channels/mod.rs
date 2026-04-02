@@ -3173,9 +3173,7 @@ async fn process_channel_message(
             } else {
                 let is_vision_capability_error = e
                     .downcast_ref::<providers::ProviderCapabilityError>()
-                    .is_some_and(|capability| {
-                        capability.capability.eq_ignore_ascii_case("vision")
-                    });
+                    .is_some_and(|capability| capability.capability.eq_ignore_ascii_case("vision"));
                 if is_vision_capability_error {
                     tracing::debug!(
                         channel = %msg.channel,
@@ -3220,7 +3218,11 @@ async fn process_channel_message(
                     if let Some(channel) = target_channel.as_ref() {
                         if let Some(ref draft_id) = draft_message_id {
                             let _ = channel
-                                .finalize_draft(&msg.reply_target, draft_id, &format!("⚠️ Error: {e}"))
+                                .finalize_draft(
+                                    &msg.reply_target,
+                                    draft_id,
+                                    &format!("⚠️ Error: {e}"),
+                                )
                                 .await;
                         } else {
                             let _ = channel

@@ -1243,6 +1243,92 @@ impl OpenAiCompatibleProvider {
         .iter()
         .any(|hint| lower.contains(hint))
     }
+
+    /// OpenAI-compatible SSE stream for a fully built chat-completions `messages` payload.
+    fn stream_chat_completions_request(
+        &self,
+        api_messages: Vec<Message>,
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let credential = match self.credential.as_ref() {
+            Some(value) => value.clone(),
+            None => {
+                let provider_name = self.name.clone();
+                return stream::once(async move {
+                    Err(StreamError::Provider(format!(
+                        "{} API key not set",
+                        provider_name
+                    )))
+                })
+                .boxed();
+            }
+        };
+
+        let request = ApiChatRequest {
+            model: model.to_string(),
+            messages: api_messages,
+            temperature,
+            stream: Some(options.enabled),
+            reasoning_effort: self.reasoning_effort_for_model(model),
+            tool_stream: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let url = self.chat_completions_url();
+        let client = self.http_client();
+        let auth_header = self.auth_header.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+
+        tokio::spawn(async move {
+            let mut req_builder = client.post(&url).json(&request);
+
+            req_builder = match &auth_header {
+                AuthStyle::Bearer => {
+                    req_builder.header("Authorization", format!("Bearer {}", credential))
+                }
+                AuthStyle::XApiKey => req_builder.header("x-api-key", &credential),
+                AuthStyle::Custom(header) => req_builder.header(header, &credential),
+            };
+
+            req_builder = req_builder.header("Accept", "text/event-stream");
+
+            let response = match req_builder.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Err(StreamError::Http(e))).await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let error = match response.text().await {
+                    Ok(e) => e,
+                    Err(_) => format!("HTTP error: {}", status),
+                };
+                let _ = tx
+                    .send(Err(StreamError::Provider(format!("{}: {}", status, error))))
+                    .await;
+                return;
+            }
+
+            let mut chunk_stream = sse_bytes_to_chunks(response, options.count_tokens);
+            while let Some(chunk) = chunk_stream.next().await {
+                if tx.send(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|chunk| (chunk, rx))
+        })
+        .boxed()
+    }
 }
 
 #[async_trait]
@@ -1752,6 +1838,33 @@ impl Provider for OpenAiCompatibleProvider {
         true
     }
 
+    fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let effective_messages = if self.merge_system_into_user {
+            Self::flatten_system_messages(messages)
+        } else {
+            messages.to_vec()
+        };
+        let api_messages: Vec<Message> = effective_messages
+            .iter()
+            .map(|m| Message {
+                role: m.role.clone(),
+                content: Self::to_message_content(
+                    &m.role,
+                    &m.content,
+                    self.user_image_parts_enabled(),
+                ),
+            })
+            .collect();
+
+        self.stream_chat_completions_request(api_messages, model, temperature, options)
+    }
+
     fn stream_chat_with_system(
         &self,
         system_prompt: Option<&str>,
@@ -1760,20 +1873,6 @@ impl Provider for OpenAiCompatibleProvider {
         temperature: f64,
         options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
-        let credential = match self.credential.as_ref() {
-            Some(value) => value.clone(),
-            None => {
-                let provider_name = self.name.clone();
-                return stream::once(async move {
-                    Err(StreamError::Provider(format!(
-                        "{} API key not set",
-                        provider_name
-                    )))
-                })
-                .boxed();
-            }
-        };
-
         let mut messages = Vec::new();
         if let Some(sys) = system_prompt {
             messages.push(Message {
@@ -1786,76 +1885,7 @@ impl Provider for OpenAiCompatibleProvider {
             content: Self::to_message_content("user", message, self.user_image_parts_enabled()),
         });
 
-        let request = ApiChatRequest {
-            model: model.to_string(),
-            messages,
-            temperature,
-            stream: Some(options.enabled),
-            reasoning_effort: self.reasoning_effort_for_model(model),
-            tool_stream: None,
-            tools: None,
-            tool_choice: None,
-        };
-
-        let url = self.chat_completions_url();
-        let client = self.http_client();
-        let auth_header = self.auth_header.clone();
-
-        // Use a channel to bridge the async HTTP response to the stream
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
-
-        tokio::spawn(async move {
-            // Build request with auth
-            let mut req_builder = client.post(&url).json(&request);
-
-            // Apply auth header
-            req_builder = match &auth_header {
-                AuthStyle::Bearer => {
-                    req_builder.header("Authorization", format!("Bearer {}", credential))
-                }
-                AuthStyle::XApiKey => req_builder.header("x-api-key", &credential),
-                AuthStyle::Custom(header) => req_builder.header(header, &credential),
-            };
-
-            // Set accept header for streaming
-            req_builder = req_builder.header("Accept", "text/event-stream");
-
-            // Send request
-            let response = match req_builder.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = tx.send(Err(StreamError::Http(e))).await;
-                    return;
-                }
-            };
-
-            // Check status
-            if !response.status().is_success() {
-                let status = response.status();
-                let error = match response.text().await {
-                    Ok(e) => e,
-                    Err(_) => format!("HTTP error: {}", status),
-                };
-                let _ = tx
-                    .send(Err(StreamError::Provider(format!("{}: {}", status, error))))
-                    .await;
-                return;
-            }
-
-            // Convert to chunk stream and forward to channel
-            let mut chunk_stream = sse_bytes_to_chunks(response, options.count_tokens);
-            while let Some(chunk) = chunk_stream.next().await {
-                if tx.send(chunk).await.is_err() {
-                    break; // Receiver dropped
-                }
-            }
-        });
-
-        // Convert channel receiver to stream
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|chunk| (chunk, rx))
-        })
-        .boxed()
+        self.stream_chat_completions_request(messages, model, temperature, options)
     }
 
     async fn warmup(&self) -> anyhow::Result<()> {

@@ -4926,7 +4926,7 @@ mod tests {
 
         // The combination of marker_count > 0 && !supports_vision() means
         // the agent loop will return ProviderCapabilityError before calling
-        // the provider, and the channel will send "⚠️ Error: ..." to the user.
+        // the provider; the channel layer does not post that error to the user.
     }
 
     #[test]
