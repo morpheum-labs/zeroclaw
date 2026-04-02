@@ -2907,7 +2907,16 @@ async fn process_channel_message(
 
     let reaction_done_emoji = match &llm_result {
         LlmExecutionResult::Completed(Ok(Ok(_))) => "\u{2705}", // ✅
-        _ => "\u{26A0}\u{FE0F}",                                // ⚠️
+        LlmExecutionResult::Completed(Ok(Err(e))) => {
+            if e.downcast_ref::<providers::ProviderCapabilityError>()
+                .is_some_and(|c| c.capability.eq_ignore_ascii_case("vision"))
+            {
+                "\u{2705}" // No channel error text; treat as handled
+            } else {
+                "\u{26A0}\u{FE0F}" // ⚠️
+            }
+        }
+        _ => "\u{26A0}\u{FE0F}", // ⚠️
     };
 
     match llm_result {
@@ -3162,10 +3171,24 @@ async fn process_channel_message(
                     }
                 }
             } else {
-                eprintln!(
-                    "  ❌ LLM error after {}ms: {e}",
-                    started_at.elapsed().as_millis()
-                );
+                let is_vision_capability_error = e
+                    .downcast_ref::<providers::ProviderCapabilityError>()
+                    .is_some_and(|capability| {
+                        capability.capability.eq_ignore_ascii_case("vision")
+                    });
+                if is_vision_capability_error {
+                    tracing::debug!(
+                        channel = %msg.channel,
+                        sender = %msg.sender,
+                        elapsed_ms = started_at.elapsed().as_millis(),
+                        "Skipping channel reply: active provider does not support vision input"
+                    );
+                } else {
+                    eprintln!(
+                        "  ❌ LLM error after {}ms: {e}",
+                        started_at.elapsed().as_millis()
+                    );
+                }
                 let safe_error = providers::sanitize_api_error(&e.to_string());
                 runtime_trace::record_event(
                     "channel_message_error",
@@ -3178,12 +3201,10 @@ async fn process_channel_message(
                     serde_json::json!({
                         "sender": msg.sender,
                         "elapsed_ms": started_at.elapsed().as_millis(),
+                        "vision_capability_error_silenced": is_vision_capability_error,
                     }),
                 );
-                let should_rollback_user_turn = e
-                    .downcast_ref::<providers::ProviderCapabilityError>()
-                    .is_some_and(|capability| capability.capability.eq_ignore_ascii_case("vision"));
-                let rolled_back = should_rollback_user_turn
+                let rolled_back = is_vision_capability_error
                     && rollback_orphan_user_turn(ctx.as_ref(), &history_key, &msg.content);
 
                 if !rolled_back {
@@ -3195,18 +3216,29 @@ async fn process_channel_message(
                         ChatMessage::assistant("[Task failed — not continuing this request]"),
                     );
                 }
-                if let Some(channel) = target_channel.as_ref() {
-                    if let Some(ref draft_id) = draft_message_id {
-                        let _ = channel
-                            .finalize_draft(&msg.reply_target, draft_id, &format!("⚠️ Error: {e}"))
-                            .await;
-                    } else {
-                        let _ = channel
-                            .send(
-                                &SendMessage::new(format!("⚠️ Error: {e}"), &msg.reply_target)
-                                    .in_thread(msg.thread_ts.clone()),
-                            )
-                            .await;
+                if !is_vision_capability_error {
+                    if let Some(channel) = target_channel.as_ref() {
+                        if let Some(ref draft_id) = draft_message_id {
+                            let _ = channel
+                                .finalize_draft(&msg.reply_target, draft_id, &format!("⚠️ Error: {e}"))
+                                .await;
+                        } else {
+                            let _ = channel
+                                .send(
+                                    &SendMessage::new(format!("⚠️ Error: {e}"), &msg.reply_target)
+                                        .in_thread(msg.thread_ts.clone()),
+                                )
+                                .await;
+                        }
+                    }
+                } else if let (Some(channel), Some(draft_id)) =
+                    (target_channel.as_ref(), draft_message_id.as_deref())
+                {
+                    if let Err(err) = channel.cancel_draft(&msg.reply_target, draft_id).await {
+                        tracing::debug!(
+                            "Failed to cancel draft on {} after vision capability error: {err}",
+                            channel.name()
+                        );
                     }
                 }
             }
@@ -9721,8 +9753,8 @@ This is an example JSON object for profile settings."#;
 
     /// End-to-end test: a photo attachment message (containing `[IMAGE:]`
     /// marker) sent through `process_channel_message` with a non-vision
-    /// provider must produce a `"⚠️ Error: …does not support vision"` reply
-    /// on the recording channel — no real Telegram or LLM API required.
+    /// provider does not post an error reply on the channel (vision is
+    /// unsupported — no user-visible error) — no real Telegram or LLM API required.
     #[tokio::test]
     async fn e2e_photo_attachment_rejected_by_non_vision_provider() {
         let channel_impl = Arc::new(RecordingChannel::default());
@@ -9802,16 +9834,10 @@ This is an example JSON object for profile settings."#;
         .await;
 
         let sent = channel_impl.sent_messages.lock().await;
-        assert_eq!(sent.len(), 1, "expected exactly one reply message");
         assert!(
-            sent[0].contains("does not support vision"),
-            "reply must mention vision capability error, got: {}",
-            sent[0]
-        );
-        assert!(
-            sent[0].contains("⚠️ Error"),
-            "reply must start with error prefix, got: {}",
-            sent[0]
+            sent.is_empty(),
+            "vision capability failure should not send a channel error, got: {:?}",
+            sent.as_slice()
         );
     }
 
@@ -9909,16 +9935,15 @@ This is an example JSON object for profile settings."#;
         .await;
 
         let sent = channel_impl.sent_messages.lock().await;
-        assert_eq!(sent.len(), 2, "expected one error and one successful reply");
-        assert!(
-            sent[0].contains("does not support vision"),
-            "first reply must mention vision capability error, got: {}",
-            sent[0]
+        assert_eq!(
+            sent.len(),
+            1,
+            "expected only the successful text reply (vision failure is silent)"
         );
         assert!(
-            sent[1].ends_with(":ok"),
-            "second reply should succeed for text-only turn, got: {}",
-            sent[1]
+            sent[0].ends_with(":ok"),
+            "reply should succeed for text-only turn, got: {}",
+            sent[0]
         );
         drop(sent);
 
