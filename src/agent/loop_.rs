@@ -350,7 +350,7 @@ pub(crate) struct CompactionOutcome {
 
 /// Estimate token count for a message history using ~4 chars/token heuristic.
 /// Includes a small overhead per message for role/framing tokens.
-fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
+pub(crate) fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
     history
         .iter()
         .map(|m| {
@@ -452,7 +452,8 @@ fn apply_compaction_summary(
     history.splice(start..compact_end, std::iter::once(summary_msg));
 }
 
-async fn auto_compact_history(
+/// LLM-backed compaction + JSONL archive (Phase 5). Used by interactive sessions and channel/daemon paths.
+pub(crate) async fn auto_compact_history(
     history: &mut Vec<ChatMessage>,
     provider: &dyn Provider,
     model: &str,
@@ -466,10 +467,10 @@ async fn auto_compact_history(
         history.len()
     };
 
-    let estimated_tokens = estimate_history_tokens(history);
+    let estimated_tokens_before = estimate_history_tokens(history);
 
     // Trigger compaction when either token budget OR message count is exceeded.
-    if estimated_tokens <= max_context_tokens && non_system_count <= max_history {
+    if estimated_tokens_before <= max_context_tokens && non_system_count <= max_history {
         return Ok(CompactionOutcome {
             did_compact: false,
             archive_rel_path: None,
@@ -532,11 +533,34 @@ async fn auto_compact_history(
     let excerpt = summary.chars().take(240).collect::<String>();
     apply_compaction_summary(history, start, compact_end, &summary);
 
+    let estimated_tokens_after = estimate_history_tokens(history);
+    let non_system_after = if has_system {
+        history.len().saturating_sub(1)
+    } else {
+        history.len()
+    };
+    tracing::info!(
+        estimated_tokens_before,
+        estimated_tokens_after,
+        non_system_messages_before = non_system_count,
+        non_system_messages_after = non_system_after,
+        "Session history auto-compaction applied (Phase 5)"
+    );
+
     Ok(CompactionOutcome {
         did_compact: true,
         archive_rel_path,
         summary_excerpt: Some(excerpt),
     })
+}
+
+/// Keep only `user` / `assistant` messages in order (drops `system`, `tool`, etc.) for channel session cache.
+pub(crate) fn user_assistant_turns_for_channel_cache(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    history
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .cloned()
+        .collect()
 }
 
 fn save_interactive_session_history(

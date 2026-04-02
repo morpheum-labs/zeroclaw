@@ -1112,6 +1112,64 @@ fn refreshed_new_session_system_prompt(ctx: &ChannelRuntimeContext) -> String {
     replace_available_skills_section(ctx.system_prompt.as_str(), &refreshed_skills)
 }
 
+/// After a successful tool loop: run the same LLM-backed compaction as interactive CLI (when over
+/// budget), then replace per-sender cache + optional JSONL session file with user/assistant turns
+/// derived from the LLM history (so tool traces are not persisted to channel session storage).
+async fn finalize_channel_turn_with_compaction(
+    ctx: &ChannelRuntimeContext,
+    history_key: &str,
+    history: &mut Vec<ChatMessage>,
+    provider: &dyn Provider,
+    model: &str,
+    agent_cfg: &crate::config::AgentConfig,
+    delivered_response: &str,
+) {
+    let _ = crate::agent::loop_::auto_compact_history(
+        history,
+        provider,
+        model,
+        agent_cfg.max_history_messages,
+        agent_cfg.max_context_tokens,
+    )
+    .await;
+
+    let mut turns = crate::agent::loop_::user_assistant_turns_for_channel_cache(history);
+    if let Some(last) = turns.last_mut() {
+        if last.role == "assistant" {
+            last.content.clone_from(&delivered_response.to_string());
+        }
+    }
+    let turns = normalize_cached_channel_turns(turns);
+    {
+        let mut h = ctx
+            .conversation_histories
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        h.insert(history_key.to_string(), turns.clone());
+    }
+    if let Some(ref store) = ctx.session_store {
+        if let Err(e) = store.rewrite_session(history_key, &turns) {
+            tracing::warn!(error = %e, "session store rewrite failed");
+        }
+    }
+
+    if agent_cfg.session_archive_retention_days > 0 {
+        let retention = std::time::Duration::from_secs(
+            u64::from(agent_cfg.session_archive_retention_days).saturating_mul(86400),
+        );
+        match crate::agent::session_record::gc_compaction_archives_older_than(retention) {
+            Ok(n) if n > 0 => {
+                tracing::info!(
+                    removed = n,
+                    "Removed old session compaction archives (retention policy, channel path)"
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "Session archive GC failed (channel path)"),
+            _ => {}
+        }
+    }
+}
+
 fn compact_sender_history(ctx: &ChannelRuntimeContext, sender_key: &str) -> bool {
     let mut histories = ctx
         .conversation_histories
@@ -2972,13 +3030,16 @@ async fn process_channel_message(
             // receives tool context through the tool-call/result messages in
             // the conversation history built by `run_tool_call_loop`, so the
             // extra summary prefix is unnecessary.
-            let history_response = delivered_response.clone();
-
-            append_sender_turn(
+            finalize_channel_turn_with_compaction(
                 ctx.as_ref(),
                 &history_key,
-                ChatMessage::assistant(&history_response),
-            );
+                &mut history,
+                active_provider.as_ref(),
+                route.model.as_str(),
+                &ctx.prompt_config.agent,
+                &delivered_response,
+            )
+            .await;
 
             // Fire-and-forget LLM-driven memory consolidation.
             if ctx.auto_save_memory && msg.content.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS {

@@ -1456,7 +1456,7 @@ impl Default for ToolRouterConfig {
 /// Append user and assistant lines to `~/.zeroclaw/sessions/transcripts/*.jsonl` (`[agent.session_transcript]`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SessionTranscriptConfig {
-    /// When true, each completed assistant reply is appended as one JSON line per session key.
+    /// When true, append user and assistant lines to the session transcript JSONL (per session key).
     #[serde(default)]
     pub enabled: bool,
     /// Maximum Unicode characters stored per line (`0` = unlimited).
@@ -1533,7 +1533,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_result_offload: ToolResultOffloadConfig,
 
-    /// Optional JSONL transcript of assistant replies (Phase 5 roadmap).
+    /// Optional JSONL transcript of user and assistant lines under `~/.zeroclaw/sessions/transcripts/`.
     #[serde(default)]
     pub session_transcript: SessionTranscriptConfig,
 

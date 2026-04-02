@@ -110,6 +110,16 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Replace all lines for a session (full JSONL rewrite). Used after Phase 5 LLM compaction
+    /// so on-disk history matches the in-memory conversation cache.
+    pub fn rewrite_session(
+        &self,
+        session_key: &str,
+        messages: &[ChatMessage],
+    ) -> std::io::Result<()> {
+        self.rewrite(session_key, messages)
+    }
+
     /// Delete a session's JSONL file. Returns `true` if the file existed.
     pub fn delete_session(&self, session_key: &str) -> std::io::Result<bool> {
         let path = self.session_path(session_key);

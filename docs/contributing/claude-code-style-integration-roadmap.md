@@ -15,7 +15,7 @@ ZeroClaw already provides a Rust-first, lightweight agent runtime (memory RAG, h
 - Orchestration is concentrated in `src/agent/` (including `loop_.rs`); interactive flows use `src/agent/agent.rs` with memory loading and system prompts.
 - Per-turn enrichment includes date/time, memory RAG, hardware RAG, tool filters, and approval hooks.
 - Delegate-style tooling exists (`src/tools/delegate.rs`, model routing profiles) but is not the same as a fully isolated nested “Task” sub-agent.
-- Compaction-related behavior exists in the loop; session JSON transcripts are not yet the single unified persistence story.
+- **Persistence is intentionally layered** (not a single blob): interactive CLI uses versioned `SessionRecord` JSON under `~/.zeroclaw/sessions/`; daemon channels keep per-sender turns in memory + optional workspace JSONL (`SessionStore`); gateway uses workspace session backends; optional `[agent.session_transcript]` JSONL is orthogonal. Compaction archives (`sessions/archives/*.jsonl`) back LLM summarization for interactive and channel paths when budgets are exceeded.
 
 ## Principles (every phase)
 
@@ -139,9 +139,13 @@ ZeroClaw already provides a Rust-first, lightweight agent runtime (memory RAG, h
 
 **Started (slice):** Versioned `SessionRecord` in `src/agent/session_record.rs` (v2 on disk, migrates v1 interactive JSON); `SessionCompactionMeta` stores archive-relative paths + last summary excerpt; `auto_compact_history` appends compacted messages to `~/.zeroclaw/sessions/archives/*.jsonl` when the home directory exists.
 
-**Incremental delivery:** Session scope IDs are centralized in [`src/agent/session_record.rs`](../../src/agent/session_record.rs) (CLI `cli:<path>`, gateway memory id + `gw_` workspace backend key, channels `conversation_history_key`). WebSocket `connect` with `session_id` re-hydrates persisted chat and resends `session_start` so SQLite/JSONL history and memory recall stay aligned. Compaction archive retention is opt-in via `[agent] session_archive_retention_days` (default `0`): GC removes aged `archives/*.jsonl` files not listed in any `compaction.archive_paths` under `~/.zeroclaw/sessions/*.json`, runs after interactive compaction and on gateway startup. Unit tests cover archive GC and `ContextAssembler` fingerprint changes when instruction files change (dynamic layer invalidation on resume).
+**Incremental delivery:** Session scope IDs are centralized in [`src/agent/session_record.rs`](../../src/agent/session_record.rs) (CLI `cli:<path>`, gateway memory id + `gw_` workspace backend key, channels `conversation_history_key`). WebSocket `connect` with `session_id` re-hydrates persisted chat and resends `session_start` so SQLite/JSONL history and memory recall stay aligned. Compaction archive retention is opt-in via `[agent] session_archive_retention_days` (default `0`): GC removes aged `archives/*.jsonl` files not listed in any `compaction.archive_paths` under `~/.zeroclaw/sessions/*.json`, runs after interactive compaction, after channel turns that run `auto_compact_history`, and on gateway startup. Unit tests cover archive GC and `ContextAssembler` fingerprint changes when instruction files change (dynamic layer invalidation on resume).
 
-**Exit criteria:** Restart and continue session; compaction measurably reduces tokens without losing recoverability.
+**Channel / daemon parity:** After a successful `run_tool_call_loop`, channels call the same `auto_compact_history` as interactive mode (when `max_history_messages` / `max_context_tokens` are exceeded). User/assistant turns are derived from the in-memory LLM history (tool messages are not persisted to channel session storage), the per-sender cache is replaced, and `SessionStore` is rewritten when session persistence is enabled. On context-window **errors**, the legacy `compact_sender_history` path (truncate recent turns) remains as a fallback. Structured `tracing` logs record estimated token counts before/after LLM compaction when it runs.
+
+**Remaining unification (optional):** `compact_context` / `Agent::trim_history` (gateway `Agent` path) and proactive `proactive_trim_turns` are separate knobs from LLM compaction; consolidating them further would be a follow-up refactor.
+
+**Exit criteria:** Restart and continue session; compaction measurably reduces tokens without losing recoverability (use `tracing` fields `estimated_tokens_before` / `estimated_tokens_after` on the `Session history auto-compaction applied (Phase 5)` event to compare before/after on a live instance).
 
 ---
 
