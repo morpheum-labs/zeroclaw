@@ -439,12 +439,9 @@ pub trait Provider: Send + Sync {
         // Default: return an empty stream (not supported)
         stream::empty().boxed()
     }
-
     /// Streaming chat with history.
-    /// Default implementation mirrors [`Provider::chat_with_history`]: it takes the
-    /// last user message (and optional system prompt) and delegates to
-    /// [`Provider::stream_chat_with_system`]. Providers that stream the full message
-    /// list (for example OpenAI-compatible backends) should override this.
+    /// Default implementation extracts the last user message and delegates to
+    /// `stream_chat_with_system`, mirroring the non-streaming `chat_with_history`.
     fn stream_chat_with_history(
         &self,
         messages: &[ChatMessage],
