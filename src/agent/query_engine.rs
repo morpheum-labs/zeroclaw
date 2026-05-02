@@ -328,14 +328,7 @@ pub(crate) async fn run_query_loop(
         if post_turn_memory.auto_save {
             if let Some(mem) = &post_turn_memory.memory {
                 let user = turn_user_message.unwrap_or("");
-                run_engine_post_turn_consolidation(
-                    provider,
-                    model,
-                    mem,
-                    user,
-                    text.as_str(),
-                )
-                .await;
+                run_engine_post_turn_consolidation(provider, model, mem, user, text.as_str()).await;
             }
         }
     }

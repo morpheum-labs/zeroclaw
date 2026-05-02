@@ -75,9 +75,7 @@ fn parse_ws_fresh_query(raw: Option<&str>) -> bool {
     let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return false;
     };
-    s.eq_ignore_ascii_case("1")
-        || s.eq_ignore_ascii_case("true")
-        || s.eq_ignore_ascii_case("yes")
+    s.eq_ignore_ascii_case("1") || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
 }
 
 /// Extract a bearer token from WebSocket-compatible sources.
@@ -543,14 +541,8 @@ async fn handle_socket(
             continue;
         }
 
-        if maybe_handle_gateway_chat_slash(
-            &state,
-            &session_key,
-            &content,
-            &mut agent,
-            &mut sender,
-        )
-        .await
+        if maybe_handle_gateway_chat_slash(&state, &session_key, &content, &mut agent, &mut sender)
+            .await
         {
             continue;
         }

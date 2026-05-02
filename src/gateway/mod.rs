@@ -9,15 +9,15 @@
 
 pub mod api;
 pub mod api_pairing;
-pub mod chat_slash;
-pub mod workspace_slash;
 #[cfg(feature = "plugins-wasm")]
 pub mod api_plugins;
 pub mod canvas;
+pub mod chat_slash;
 pub mod nodes;
 pub mod sse;
 pub mod static_files;
 pub mod web_ui;
+pub mod workspace_slash;
 pub mod ws;
 
 use crate::channels::{
@@ -369,7 +369,9 @@ pub struct AppState {
     pub canvas_store: CanvasStore,
     /// Per gateway WS session key — provider/model overrides from `/models` and `/model`.
     pub gateway_chat_routes: Arc<
-        Mutex<std::collections::HashMap<String, crate::channels::runtime_slash::SlashRouteSelection>>,
+        Mutex<
+            std::collections::HashMap<String, crate::channels::runtime_slash::SlashRouteSelection>,
+        >,
     >,
     /// Embedded or external `web/dist/` static dashboard.
     pub web_ui: web_ui::WebUiServeState,

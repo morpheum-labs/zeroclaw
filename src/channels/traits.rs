@@ -1,4 +1,21 @@
 use async_trait::async_trait;
+use std::sync::Arc;
+
+/// Label for one inline keyboard button (`callback_data` or `url`, not both).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineKeyboardButton {
+    pub text: String,
+    pub callback_data: Option<String>,
+    pub url: Option<String>,
+}
+
+/// One horizontal row of inline keyboard buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineKeyboardRow(pub Vec<InlineKeyboardButton>);
+
+/// Telegram-style inline keyboard (`reply_markup.inline_keyboard`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineKeyboardMarkup(pub Vec<InlineKeyboardRow>);
 
 /// A message received from or sent to a channel
 #[derive(Debug, Clone)]
@@ -31,6 +48,8 @@ pub struct SendMessage {
     pub subject: Option<String>,
     /// Platform thread identifier for threaded replies (e.g. Slack `thread_ts`).
     pub thread_ts: Option<String>,
+    /// Optional inline keyboard (Telegram sends as `reply_markup`; other channels ignore).
+    pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
 impl SendMessage {
@@ -41,6 +60,7 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: None,
             thread_ts: None,
+            reply_markup: None,
         }
     }
 
@@ -55,12 +75,19 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: Some(subject.into()),
             thread_ts: None,
+            reply_markup: None,
         }
     }
 
     /// Set the thread identifier for threaded replies.
     pub fn in_thread(mut self, thread_ts: Option<String>) -> Self {
         self.thread_ts = thread_ts;
+        self
+    }
+
+    /// Attach an inline keyboard (Telegram only).
+    pub fn with_reply_markup(mut self, markup: Option<InlineKeyboardMarkup>) -> Self {
+        self.reply_markup = markup;
         self
     }
 }
@@ -96,6 +123,19 @@ pub trait Channel: Send + Sync {
     /// Whether this channel supports progressive message updates via draft edits.
     fn supports_draft_updates(&self) -> bool {
         false
+    }
+
+    /// Whether `SendMessage.reply_markup` is honored for outbound messages.
+    fn supports_inline_keyboards(&self) -> bool {
+        false
+    }
+
+    /// When set, the Telegram pending registry receives inline/text replies for `ask_user`
+    /// without starting a second `getUpdates` loop.
+    fn telegram_pending_ask_registry(
+        &self,
+    ) -> Option<Arc<super::telegram_pending::TelegramPendingAskRegistry>> {
+        None
     }
 
     /// Send an initial draft message. Returns a platform-specific message ID for later edits.

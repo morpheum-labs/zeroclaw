@@ -1574,7 +1574,9 @@ mod tests {
             path_prefix: String::new(),
             hooks: None,
             canvas_store: crate::tools::canvas::CanvasStore::new(),
-            gateway_chat_routes: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            gateway_chat_routes: Arc::new(
+                parking_lot::Mutex::new(std::collections::HashMap::new()),
+            ),
             web_ui,
         }
     }

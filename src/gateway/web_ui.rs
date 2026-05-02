@@ -106,7 +106,9 @@ impl WebUiServeState {
         #[cfg(feature = "embedded-web-ui")]
         {
             if WebAssets::get("index.html").is_some() {
-                tracing::warn!("WebUI external path unusable ({reason}); falling back to embedded assets");
+                tracing::warn!(
+                    "WebUI external path unusable ({reason}); falling back to embedded assets"
+                );
                 *self.inner.active.write() = WebUiActive::Embedded;
             }
         }
@@ -343,10 +345,7 @@ fn serve_embedded_index(path_prefix: &str) -> Response {
         return (
             StatusCode::OK,
             [
-                (
-                    header::CONTENT_TYPE,
-                    "text/html; charset=utf-8".to_string(),
-                ),
+                (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
                 (header::CACHE_CONTROL, "no-cache".to_string()),
             ],
             html,
@@ -379,10 +378,7 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
             }
             (StatusCode::NOT_FOUND, "Not found").into_response()
         }
-        WebUiActive::External {
-            root_canonical,
-            ..
-        } => {
+        WebUiActive::External { root_canonical, .. } => {
             if !root_canonical.is_dir() || !root_canonical.join("index.html").is_file() {
                 state
                     .web_ui
@@ -401,11 +397,7 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
             if file_path.is_dir() {
                 return (StatusCode::NOT_FOUND, "Not found").into_response();
             }
-            let mime_path = if rel.is_empty() {
-                "index.html"
-            } else {
-                rel
-            };
+            let mime_path = if rel.is_empty() { "index.html" } else { rel };
             if file_path.file_name().and_then(|n| n.to_str()) == Some("index.html") {
                 match tokio::fs::read_to_string(&file_path).await {
                     Ok(html) => {
@@ -413,10 +405,7 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
                         return (
                             StatusCode::OK,
                             [
-                                (
-                                    header::CONTENT_TYPE,
-                                    "text/html; charset=utf-8".to_string(),
-                                ),
+                                (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
                                 (header::CACHE_CONTROL, "no-cache".to_string()),
                             ],
                             body,
@@ -449,9 +438,7 @@ pub async fn handle_spa_fallback(State(state): State<AppState>) -> Response {
 
     match state.web_ui.active() {
         WebUiActive::Embedded => serve_embedded_index(path_prefix),
-        WebUiActive::External {
-            root_canonical, ..
-        } => {
+        WebUiActive::External { root_canonical, .. } => {
             let index = root_canonical.join("index.html");
             if !root_canonical.is_dir() || !index.is_file() {
                 state
@@ -465,10 +452,7 @@ pub async fn handle_spa_fallback(State(state): State<AppState>) -> Response {
                     (
                         StatusCode::OK,
                         [
-                            (
-                                header::CONTENT_TYPE,
-                                "text/html; charset=utf-8".to_string(),
-                            ),
+                            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
                             (header::CACHE_CONTROL, "no-cache".to_string()),
                         ],
                         html,

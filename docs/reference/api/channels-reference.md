@@ -156,12 +156,20 @@ stream_mode = "off"               # optional: off | partial
 draft_update_interval_ms = 1000   # optional: edit throttle for partial streaming
 mention_only = false              # optional: require @mention in groups
 interrupt_on_new_message = false  # optional: cancel in-flight same-sender same-chat request
+enable_inline_buttons = true      # optional: send inline keyboards when tools/messages set reply_markup (default: true)
 ```
 
 Telegram notes:
 
 - `interrupt_on_new_message = true` preserves interrupted user turns in conversation history, then restarts generation on the newest message.
 - Interruption scope is strict: same sender in the same chat. Messages from different chats are processed independently.
+
+#### Inline keyboards (buttons)
+
+When `enable_inline_buttons = true`, outbound messages may include Telegram **inline keyboards** via the channel layer (`reply_markup`). The `ask_user` tool renders choice lists as tap buttons when running on Telegram (and falls back to a numbered text list when buttons are disabled or on other channels). Callback payloads stay within Telegram’s **64-byte** `callback_data` limit per button.
+
+- Set `enable_inline_buttons = false` to force plain text only (no keyboard markup on sends).
+- For `ask_user` from Telegram, pass `reply_target` (same format as normal replies: `chat_id` or `chat_id:topic_id` for forum threads); it is injected automatically when the tool runs inside a channel turn.
 
 ### 4.2 Discord
 

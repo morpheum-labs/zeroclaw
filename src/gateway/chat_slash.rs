@@ -146,8 +146,7 @@ pub async fn handle_gateway_ws_slash(
                             })
                         }
                         Err(err) => {
-                            let safe_err =
-                                crate::providers::sanitize_api_error(&err.to_string());
+                            let safe_err = crate::providers::sanitize_api_error(&err.to_string());
                             Some(GatewaySlashResult {
                                 reply: format!(
                             "Failed to initialize provider `{provider_name}`. Route unchanged.\nDetails: {safe_err}"

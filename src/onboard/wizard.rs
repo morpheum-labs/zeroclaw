@@ -3831,6 +3831,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     proxy_url: None,
                     control_hub_enabled: false,
                     control_hub_prefix: "z".into(),
+                    enable_inline_buttons: true,
                 });
             }
             ChannelMenuChoice::Discord => {

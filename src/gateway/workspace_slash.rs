@@ -37,9 +37,7 @@ pub fn parse_gateway_workspace_slash(content: &str) -> Option<GatewayWorkspaceSl
     }
     if cmd_lower == "/refresh" {
         let rest: Vec<&str> = parts.collect();
-        if rest.is_empty()
-            || (rest.len() == 1 && rest[0].eq_ignore_ascii_case("all"))
-        {
+        if rest.is_empty() || (rest.len() == 1 && rest[0].eq_ignore_ascii_case("all")) {
             return Some(GatewayWorkspaceSlashKind::RefreshAll);
         }
         return Some(GatewayWorkspaceSlashKind::RefreshPath(rest.join(" ")));

@@ -81,8 +81,7 @@ impl CommandValidator for AutonomousExtraPatternValidator {
     fn validate(&self, command: &str) -> Result<(), String> {
         if self.pattern.is_match(command) {
             return Err(
-                "blocked by autonomous pattern policy (shell-full): matched dangerous token"
-                    .into(),
+                "blocked by autonomous pattern policy (shell-full): matched dangerous token".into(),
             );
         }
         Ok(())

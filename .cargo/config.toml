@@ -12,4 +12,4 @@ linker = "armv7a-linux-androideabi21-clang"
 linker = "aarch64-linux-android21-clang"
 rustflags = ["-C", "link-arg=-Wl,-z,stack-size=8388608"]
 [build]
-target-dir = "/Volumes/Mac-Mugen/rustcompile"
+target-dir = "/Volumes/docker-only/rustcompile"

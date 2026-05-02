@@ -107,11 +107,11 @@ mod providers;
 mod runtime;
 mod security;
 mod service;
+mod shell;
 mod skillforge;
 mod skills;
 mod sop;
 mod tools;
-mod shell;
 mod tunnel;
 mod util;
 mod verifiable_intent;
@@ -1461,12 +1461,11 @@ async fn main() -> Result<()> {
                 probe.profile = trimmed.clone();
                 probe.validate().context("Invalid shell.profile value")?;
                 config.shell.profile = trimmed;
-                config.validate().context("config validation failed after shell.profile update")?;
+                config
+                    .validate()
+                    .context("config validation failed after shell.profile update")?;
                 config.save().await.context("Failed to save config.toml")?;
-                println!(
-                    "Updated shell.profile in {}.",
-                    config.config_path.display()
-                );
+                println!("Updated shell.profile in {}.", config.config_path.display());
                 println!("Restart the zeroclaw gateway or agent for this change to take effect.");
                 Ok(())
             }

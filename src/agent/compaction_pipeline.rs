@@ -140,8 +140,7 @@ pub fn build_memory_injection_fragment(workspace_dir: Option<&Path>) -> Option<S
         }
         if index_stale {
             warnings.push(
-                "**Warning:** AutoMemory MEMORY.md index may be stale (> 24 h since mtime)."
-                    .into(),
+                "**Warning:** AutoMemory MEMORY.md index may be stale (> 24 h since mtime).".into(),
             );
         }
         if !index_snippet.trim().is_empty() {

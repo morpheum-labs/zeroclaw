@@ -7,7 +7,11 @@
 //! [`ReactionTool`](super::reaction::ReactionTool).
 
 use super::traits::{Tool, ToolResult};
-use crate::channels::traits::{Channel, ChannelMessage, SendMessage};
+use crate::channels::telegram_pending::{choice_callback_data, pending_key_from_reply_target};
+use crate::channels::traits::{
+    Channel, ChannelMessage, InlineKeyboardButton, InlineKeyboardMarkup, InlineKeyboardRow,
+    SendMessage,
+};
 use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
@@ -67,6 +71,22 @@ fn format_question(question: &str, choices: Option<&[String]>) -> String {
     lines.join("\n")
 }
 
+fn telegram_choice_markup(
+    correlation: u64,
+    choices: &[String],
+) -> anyhow::Result<InlineKeyboardMarkup> {
+    let mut rows = Vec::new();
+    for (i, label) in choices.iter().enumerate() {
+        let cb = choice_callback_data(correlation, i)?;
+        rows.push(InlineKeyboardRow(vec![InlineKeyboardButton {
+            text: label.clone(),
+            callback_data: Some(cb),
+            url: None,
+        }]));
+    }
+    Ok(InlineKeyboardMarkup(rows))
+}
+
 #[async_trait]
 impl Tool for AskUserTool {
     fn name(&self) -> &str {
@@ -90,7 +110,11 @@ impl Tool for AskUserTool {
                 "choices": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional list of choices (renders as buttons on Telegram, numbered list on CLI)"
+                    "description": "Optional list of choices (inline tap buttons on Telegram when enabled; numbered list fallback everywhere)"
+                },
+                "reply_target": {
+                    "type": "string",
+                    "description": "Conversation destination (required on Telegram): same value as the channel reply_target / chat id, optionally `chat_id:topic_id` for forum threads"
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -175,50 +199,165 @@ impl Tool for AskUserTool {
             }
         };
 
+        let reply_target_arg = args
+            .get("reply_target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let recipient = if channel_name == "telegram" {
+            match reply_target_arg {
+                Some(rt) => rt,
+                None => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(
+                            "Missing 'reply_target' for Telegram (pass explicitly or run from a channel context so it is injected)"
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+        } else {
+            reply_target_arg.unwrap_or_default()
+        };
+
         // Format and send the question
         let text = format_question(&question, choices.as_deref());
-        let msg = SendMessage::new(&text, "");
-        if let Err(e) = channel.send(&msg).await {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Failed to send question to channel '{channel_name}': {e}"
-                )),
-            });
-        }
 
-        // Listen for user response with timeout
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<ChannelMessage>(1);
-        let timeout = std::time::Duration::from_secs(timeout_secs);
+        if channel_name == "telegram" {
+            let Some(registry) = channel.telegram_pending_ask_registry() else {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(
+                        "Telegram channel is missing the pending reply registry (internal error)"
+                            .to_string(),
+                    ),
+                });
+            };
 
-        // Spawn a listener task on the channel
-        let listen_channel = Arc::clone(&channel);
-        let listen_handle = tokio::spawn(async move { listen_channel.listen(tx).await });
+            let key = pending_key_from_reply_target(&recipient);
+            let has_structured_choices = choices.as_ref().is_some_and(|c| !c.is_empty());
 
-        let response = tokio::time::timeout(timeout, rx.recv()).await;
+            let (rx, markup) = if has_structured_choices {
+                let Some(choices_vec) = choices.as_ref().filter(|c| !c.is_empty()).cloned() else {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("ask_user: internal error resolving choices".to_string()),
+                    });
+                };
+                let (correlation, rx) =
+                    match registry.register_choice_wait(key.clone(), choices_vec.clone()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Ok(ToolResult {
+                                success: false,
+                                output: String::new(),
+                                error: Some(format!("Failed to register ask_user wait: {e}")),
+                            });
+                        }
+                    };
+                let markup = if channel.supports_inline_keyboards() {
+                    match telegram_choice_markup(correlation, &choices_vec) {
+                        Ok(m) => Some(m),
+                        Err(e) => {
+                            registry.cancel_pending_for_chat(&key);
+                            return Ok(ToolResult {
+                                success: false,
+                                output: String::new(),
+                                error: Some(format!("Inline keyboard build failed: {e}")),
+                            });
+                        }
+                    }
+                } else {
+                    None
+                };
+                (rx, markup)
+            } else {
+                let rx = registry.register_open_wait(key.clone());
+                (rx, None)
+            };
 
-        // Abort the listener once we have a response or timeout
-        listen_handle.abort();
+            let msg = SendMessage::new(&text, &recipient).with_reply_markup(markup);
+            if let Err(e) = channel.send(&msg).await {
+                registry.cancel_pending_for_chat(&key);
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Failed to send question to channel '{channel_name}': {e}"
+                    )),
+                });
+            }
 
-        match response {
-            Ok(Some(msg)) => Ok(ToolResult {
-                success: true,
-                output: msg.content,
-                error: None,
-            }),
-            Ok(None) => Ok(ToolResult {
-                success: false,
-                output: "TIMEOUT".to_string(),
-                error: Some("Channel closed before receiving a response".to_string()),
-            }),
-            Err(_) => Ok(ToolResult {
-                success: false,
-                output: "TIMEOUT".to_string(),
-                error: Some(format!(
-                    "No response received within {timeout_secs} seconds"
-                )),
-            }),
+            let timeout = std::time::Duration::from_secs(timeout_secs);
+            match tokio::time::timeout(timeout, rx).await {
+                Ok(Ok(answer)) => Ok(ToolResult {
+                    success: true,
+                    output: answer,
+                    error: None,
+                }),
+                Ok(Err(_)) => Ok(ToolResult {
+                    success: false,
+                    output: "TIMEOUT".to_string(),
+                    error: Some("Reply waiter closed before receiving a response".to_string()),
+                }),
+                Err(_) => {
+                    registry.cancel_pending_for_chat(&key);
+                    Ok(ToolResult {
+                        success: false,
+                        output: "TIMEOUT".to_string(),
+                        error: Some(format!(
+                            "No response received within {timeout_secs} seconds"
+                        )),
+                    })
+                }
+            }
+        } else {
+            let msg = SendMessage::new(&text, &recipient);
+            if let Err(e) = channel.send(&msg).await {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Failed to send question to channel '{channel_name}': {e}"
+                    )),
+                });
+            }
+
+            // Listen for user response with timeout (non-Telegram channels).
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<ChannelMessage>(1);
+            let timeout = std::time::Duration::from_secs(timeout_secs);
+
+            let listen_channel = Arc::clone(&channel);
+            let listen_handle = tokio::spawn(async move { listen_channel.listen(tx).await });
+
+            let response = tokio::time::timeout(timeout, rx.recv()).await;
+
+            listen_handle.abort();
+
+            match response {
+                Ok(Some(msg)) => Ok(ToolResult {
+                    success: true,
+                    output: msg.content,
+                    error: None,
+                }),
+                Ok(None) => Ok(ToolResult {
+                    success: false,
+                    output: "TIMEOUT".to_string(),
+                    error: Some("Channel closed before receiving a response".to_string()),
+                }),
+                Err(_) => Ok(ToolResult {
+                    success: false,
+                    output: "TIMEOUT".to_string(),
+                    error: Some(format!(
+                        "No response received within {timeout_secs} seconds"
+                    )),
+                }),
+            }
         }
     }
 }
@@ -338,6 +477,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["question"].is_object());
         assert!(schema["properties"]["choices"].is_object());
+        assert!(schema["properties"]["reply_target"].is_object());
         assert!(schema["properties"]["timeout_secs"].is_object());
         assert!(schema["properties"]["channel"].is_object());
         let required = schema["required"].as_array().unwrap();
@@ -428,6 +568,7 @@ mod tests {
         let result = tool
             .execute(json!({
                 "question": "Confirm?",
+                "reply_target": "room1",
                 "timeout_secs": 1
             }))
             .await
@@ -446,6 +587,7 @@ mod tests {
         let result = tool
             .execute(json!({
                 "question": "Should we deploy?",
+                "reply_target": "user1",
                 "timeout_secs": 5
             }))
             .await
@@ -458,14 +600,15 @@ mod tests {
     #[tokio::test]
     async fn successful_response_with_choices() {
         let tool = make_tool_with_channels(vec![(
-            "telegram",
-            Arc::new(RespondingChannel::new("telegram", "2")) as Arc<dyn Channel>,
+            "slack",
+            Arc::new(RespondingChannel::new("slack", "2")) as Arc<dyn Channel>,
         )]);
         let result = tool
             .execute(json!({
                 "question": "Pick an option",
                 "choices": ["Option A", "Option B"],
-                "channel": "telegram",
+                "channel": "slack",
+                "reply_target": "C123",
                 "timeout_secs": 5
             }))
             .await
@@ -494,7 +637,11 @@ mod tests {
 
         // Now the tool can route to the channel
         let result = tool
-            .execute(json!({ "question": "Hello?", "timeout_secs": 5 }))
+            .execute(json!({
+                "question": "Hello?",
+                "reply_target": "cli-user",
+                "timeout_secs": 5
+            }))
             .await
             .unwrap();
         assert!(result.success);

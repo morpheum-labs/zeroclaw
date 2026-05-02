@@ -52,8 +52,7 @@ fn is_valid_telegram_command_token(s: &str) -> bool {
     if b.is_empty() || b.len() > 32 {
         return false;
     }
-    b.iter()
-        .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+    b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
 }
 
 /// Build `BotCommand.command` values for Telegram `setMyCommands` (no leading slash).
@@ -225,11 +224,8 @@ async fn dispatch_shell(config: &Config, tail: &[String]) -> Result<String> {
         let Some(name) = tail.get(1) else {
             anyhow::bail!("usage: shell profile <safe|balanced|autonomous|custom-id>");
         };
-        return run_zeroclaw_cli(
-            config,
-            vec!["shell".into(), "profile".into(), name.clone()],
-        )
-        .await;
+        return run_zeroclaw_cli(config, vec!["shell".into(), "profile".into(), name.clone()])
+            .await;
     }
     anyhow::bail!("usage: shell profile <name>");
 }
@@ -241,11 +237,7 @@ async fn dispatch_cron(config: &Config, tail: &[String]) -> Result<String> {
             let Some(id) = tail.get(1) else {
                 anyhow::bail!("usage: cron remove <id>");
             };
-            run_zeroclaw_cli(
-                config,
-                vec!["cron".into(), "remove".into(), id.clone()],
-            )
-            .await
+            run_zeroclaw_cli(config, vec!["cron".into(), "remove".into(), id.clone()]).await
         }
         Some("add") => {
             if tail.len() < 3 {
@@ -264,7 +256,12 @@ async fn dispatch_memory(config: &Config, tail: &[String]) -> Result<String> {
         None | Some("list") => {
             run_zeroclaw_cli(
                 config,
-                vec!["memory".into(), "list".into(), "--limit".into(), "50".into()],
+                vec![
+                    "memory".into(),
+                    "list".into(),
+                    "--limit".into(),
+                    "50".into(),
+                ],
             )
             .await
         }
@@ -288,9 +285,7 @@ async fn dispatch_estop(config: &Config, tail: &[String]) -> Result<String> {
     }
     match tail.first().map(|s| s.as_str()) {
         Some("status") => run_zeroclaw_cli(config, vec!["estop".into(), "status".into()]).await,
-        Some("engage") => {
-            run_zeroclaw_cli(config, vec!["estop".into(), "engage".into()]).await
-        }
+        Some("engage") => run_zeroclaw_cli(config, vec!["estop".into(), "engage".into()]).await,
         Some("resume") => {
             anyhow::bail!(
                 "`estop resume` may require an OTP or interactive confirmation. \
@@ -304,10 +299,10 @@ Use `zeroclaw estop resume` on the host."
 
 async fn dispatch_channel(config: &Config, tail: &[String]) -> Result<String> {
     match tail.first().map(|s| s.as_str()) {
-        None | Some("list") => run_zeroclaw_cli(config, vec!["channel".into(), "list".into()]).await,
-        Some("doctor") => {
-            run_zeroclaw_cli(config, vec!["channel".into(), "doctor".into()]).await
+        None | Some("list") => {
+            run_zeroclaw_cli(config, vec!["channel".into(), "list".into()]).await
         }
+        Some("doctor") => run_zeroclaw_cli(config, vec!["channel".into(), "doctor".into()]).await,
         Some(other) => anyhow::bail!("unknown channel subcommand `{other}`"),
     }
 }

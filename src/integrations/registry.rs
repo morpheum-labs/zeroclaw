@@ -844,6 +844,7 @@ mod tests {
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
         let entries = all_integrations();
         let tg = entries.iter().find(|e| e.name == "Telegram").unwrap();

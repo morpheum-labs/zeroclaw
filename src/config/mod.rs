@@ -30,13 +30,12 @@ pub use schema::{
     SchedulerConfig, SecretsConfig, SecurityConfig, SecurityOpsConfig, SessionTranscriptConfig,
     ShellAutonomousProfileConfig, ShellBalancedProfileConfig, ShellCustomProfileEntry,
     ShellSafeProfileConfig, ShellSection, SkillCreationConfig, SkillsConfig,
-    SkillsPromptInjectionMode, SlackConfig,
-    SopConfig, StorageConfig, StorageProviderConfig, StorageProviderSection, StreamMode,
-    SwarmConfig, SwarmStrategy, TelegramConfig, TextBrowserConfig, ToolFilterGroup,
-    ToolFilterGroupMode, ToolResultOffloadConfig, TranscriptionConfig, TtsConfig, TunnelConfig,
-    VerifiableIntentConfig, WebFetchConfig, WebSearchConfig, WebUiConfig, WebhookConfig,
-    WhatsAppChatPolicy,
-    WhatsAppWebMode, WorkspaceConfig, DEFAULT_GWS_SERVICES,
+    SkillsPromptInjectionMode, SlackConfig, SopConfig, StorageConfig, StorageProviderConfig,
+    StorageProviderSection, StreamMode, SwarmConfig, SwarmStrategy, TelegramConfig,
+    TextBrowserConfig, ToolFilterGroup, ToolFilterGroupMode, ToolResultOffloadConfig,
+    TranscriptionConfig, TtsConfig, TunnelConfig, VerifiableIntentConfig, WebFetchConfig,
+    WebSearchConfig, WebUiConfig, WebhookConfig, WhatsAppChatPolicy, WhatsAppWebMode,
+    WorkspaceConfig, DEFAULT_GWS_SERVICES,
 };
 
 pub fn name_and_presence<T: traits::ChannelConfig>(channel: Option<&T>) -> (&'static str, bool) {
@@ -69,6 +68,7 @@ mod tests {
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         };
 
         let discord = DiscordConfig {

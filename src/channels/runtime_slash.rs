@@ -64,9 +64,7 @@ pub fn parse_runtime_slash(channel_name: &str, content: &str) -> Option<ParsedRu
         "/new" => Some(ParsedRuntimeSlash::NewSession),
         "/models" if supports_runtime_model_switch(channel_name) => {
             if let Some(provider) = parts.next() {
-                Some(ParsedRuntimeSlash::SetProvider(
-                    provider.trim().to_string(),
-                ))
+                Some(ParsedRuntimeSlash::SetProvider(provider.trim().to_string()))
             } else {
                 Some(ParsedRuntimeSlash::ShowProviders)
             }
@@ -79,7 +77,9 @@ pub fn parse_runtime_slash(channel_name: &str, content: &str) -> Option<ParsedRu
                 Some(ParsedRuntimeSlash::SetModel(model))
             }
         }
-        "/config" if supports_runtime_model_switch(channel_name) => Some(ParsedRuntimeSlash::ShowConfig),
+        "/config" if supports_runtime_model_switch(channel_name) => {
+            Some(ParsedRuntimeSlash::ShowConfig)
+        }
         _ => None,
     }
 }

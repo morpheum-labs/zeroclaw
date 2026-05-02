@@ -147,19 +147,34 @@ mod tests {
 
     #[test]
     fn skill_shell_tool_name_is_prefixed() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         assert_eq!(tool.name(), "my_skill.run_lint");
     }
 
     #[test]
     fn skill_shell_tool_description() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         assert_eq!(tool.description(), "Run the linter on a file");
     }
 
     #[test]
     fn skill_shell_tool_parameters_schema() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         let schema = tool.parameters_schema();
 
         assert_eq!(schema["type"], "object");
@@ -175,7 +190,12 @@ mod tests {
 
     #[test]
     fn skill_shell_tool_substitute_args() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         let result = tool.substitute_args(&serde_json::json!({
             "file": "src/main.rs",
             "format": "json"
@@ -185,7 +205,12 @@ mod tests {
 
     #[test]
     fn skill_shell_tool_substitute_missing_arg() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         let result = tool.substitute_args(&serde_json::json!({"file": "test.rs"}));
         // Missing {{format}} placeholder stays in the command
         assert!(result.contains("{{format}}"));
@@ -225,7 +250,12 @@ mod tests {
 
     #[test]
     fn skill_shell_tool_spec_roundtrip() {
-        let tool = SkillShellTool::new("my_skill", &sample_skill_tool(), test_security(), test_engine());
+        let tool = SkillShellTool::new(
+            "my_skill",
+            &sample_skill_tool(),
+            test_security(),
+            test_engine(),
+        );
         let spec = tool.spec();
         assert_eq!(spec.name, "my_skill.run_lint");
         assert_eq!(spec.description, "Run the linter on a file");

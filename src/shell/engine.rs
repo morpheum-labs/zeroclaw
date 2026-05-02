@@ -108,11 +108,7 @@ impl ShellEngine {
             ShellProfileKind::Balanced => "Balanced",
             ShellProfileKind::Autonomous => "Autonomous",
         };
-        let name = self
-            .resolved
-            .custom_id
-            .as_deref()
-            .unwrap_or(base);
+        let name = self.resolved.custom_id.as_deref().unwrap_or(base);
         format!(
             "Profile: {name} ({base}) | Validators: {}",
             self.validator_count
@@ -139,10 +135,7 @@ impl ShellEngine {
             };
         }
 
-        match self
-            .security
-            .validate_command_execution(command, approved)
-        {
+        match self.security.validate_command_execution(command, approved) {
             Ok(_) => {}
             Err(reason) => {
                 return ToolResult {
@@ -175,19 +168,20 @@ impl ShellEngine {
         }
 
         let login = self.shell.login_shell;
-        let mut cmd = match self
-            .runtime
-            .build_shell_command(&cmd_str, &self.security.workspace_dir, login)
-        {
-            Ok(cmd) => cmd,
-            Err(e) => {
-                return ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to build runtime command: {e}")),
-                };
-            }
-        };
+        let mut cmd =
+            match self
+                .runtime
+                .build_shell_command(&cmd_str, &self.security.workspace_dir, login)
+            {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    return ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Failed to build runtime command: {e}")),
+                    };
+                }
+            };
 
         if let Err(e) = self.sandbox.wrap_command(cmd.as_std_mut()) {
             return ToolResult {
@@ -205,8 +199,7 @@ impl ShellEngine {
         }
 
         let timeout_secs = self.shell.timeout_secs;
-        let result =
-            tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
 
         let mut out = match result {
             Ok(Ok(output)) => {

@@ -6531,6 +6531,10 @@ fn default_telegram_control_hub_prefix() -> String {
     "z".to_string()
 }
 
+fn default_telegram_inline_buttons_enabled() -> bool {
+    true
+}
+
 /// Telegram bot channel configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TelegramConfig {
@@ -6569,6 +6573,10 @@ pub struct TelegramConfig {
     /// Must be 1–32 ASCII letters, digits, or `_`.
     #[serde(default = "default_telegram_control_hub_prefix")]
     pub control_hub_prefix: String,
+    /// When true (default), outbound messages may include inline keyboards and `ask_user`
+    /// choice prompts use tap buttons when possible.
+    #[serde(default = "default_telegram_inline_buttons_enabled")]
+    pub enable_inline_buttons: bool,
 }
 
 impl ChannelConfig for TelegramConfig {
@@ -8947,7 +8955,8 @@ impl Config {
                     tracing::info!(path = %bak_path.display(), "Wrote config backup before shell table migration");
                 }
             }
-            let merged = toml::to_string(&root).context("Failed to serialize config after shell migration")?;
+            let merged = toml::to_string(&root)
+                .context("Failed to serialize config after shell migration")?;
 
             // Deserialize the config with the standard TOML parser.
             //
@@ -11418,6 +11427,7 @@ default_temperature = 0.7
                     proxy_url: None,
                     control_hub_enabled: false,
                     control_hub_prefix: "z".into(),
+                    enable_inline_buttons: true,
                 }),
                 discord: None,
                 discord_history: None,
@@ -12227,6 +12237,7 @@ default_temperature = 0.7
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         };
         let json = serde_json::to_string(&tc).unwrap();
         let parsed: TelegramConfig = serde_json::from_str(&json).unwrap();
@@ -12235,6 +12246,7 @@ default_temperature = 0.7
         assert_eq!(parsed.stream_mode, StreamMode::Partial);
         assert_eq!(parsed.draft_update_interval_ms, 500);
         assert!(parsed.interrupt_on_new_message);
+        assert!(parsed.enable_inline_buttons);
     }
 
     #[test]
@@ -12246,6 +12258,7 @@ default_temperature = 0.7
         assert!(!parsed.interrupt_on_new_message);
         assert!(!parsed.control_hub_enabled);
         assert_eq!(parsed.control_hub_prefix, "z");
+        assert!(parsed.enable_inline_buttons);
     }
 
     #[test]
@@ -14876,6 +14889,7 @@ require_otp_to_resume = true
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
 
         // Save (triggers encryption)
@@ -15462,6 +15476,17 @@ require_otp_to_resume = true
         "#;
         let cfg: TelegramConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.ack_reactions, None);
+    }
+
+    #[test]
+    async fn telegram_config_enable_inline_buttons_false_deserializes() {
+        let toml_str = r#"
+            bot_token = "123:ABC"
+            allowed_users = ["alice"]
+            enable_inline_buttons = false
+        "#;
+        let cfg: TelegramConfig = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.enable_inline_buttons);
     }
 
     #[test]

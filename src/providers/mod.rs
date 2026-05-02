@@ -1083,13 +1083,7 @@ fn parse_openai_custom_provider_url(
         } else {
             let q = kept
                 .iter()
-                .map(|(k, v)| {
-                    format!(
-                        "{}={}",
-                        urlencoding::encode(k),
-                        urlencoding::encode(v)
-                    )
-                })
+                .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
                 .collect::<Vec<_>>()
                 .join("&");
             parsed.set_query(Some(&q));

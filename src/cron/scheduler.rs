@@ -246,10 +246,7 @@ async fn run_hand_job(config: &Config, security: &SecurityPolicy, job: &CronJob)
     let hand = match crate::hands::load_hand(&hands_dir, hand_name) {
         Ok(h) => h,
         Err(e) => {
-            return (
-                false,
-                format!("failed to load hand `{hand_name}`: {e}"),
-            );
+            return (false, format!("failed to load hand `{hand_name}`: {e}"));
         }
     };
 

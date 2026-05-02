@@ -1,4 +1,5 @@
-use super::traits::{Channel, ChannelMessage, SendMessage};
+use super::telegram_pending::{TelegramPendingAskRegistry, TELEGRAM_CALLBACK_DATA_MAX_BYTES};
+use super::traits::{Channel, ChannelMessage, InlineKeyboardMarkup, SendMessage};
 use crate::config::{Config, StreamMode};
 use crate::security::pairing::PairingGuard;
 use anyhow::Context;
@@ -196,12 +197,7 @@ const TELEGRAM_MAX_INLINE_TEXT_ATTACHMENT_BYTES: usize = 100 * 1024;
 fn is_telegram_inline_text_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "txt" | "md" | "markdown"
-            )
-        })
+        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "txt" | "md" | "markdown"))
 }
 
 /// Appends UTF-8 file contents after the path marker for small `.txt` / `.md` / `.markdown` files.
@@ -402,6 +398,10 @@ pub struct TelegramChannel {
     proxy_url: Option<String>,
     /// When set, used to register Telegram bot commands (`setMyCommands`) on connect.
     command_sync: Option<Arc<Config>>,
+    /// Routes `ask_user` replies without a second `getUpdates` consumer.
+    pending_ask: Arc<TelegramPendingAskRegistry>,
+    /// When false, [`SendMessage::reply_markup`] is ignored for outbound sends.
+    enable_inline_buttons: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,7 +447,15 @@ impl TelegramChannel {
             pending_voice: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             proxy_url: None,
             command_sync: None,
+            pending_ask: TelegramPendingAskRegistry::new(),
+            enable_inline_buttons: true,
         }
+    }
+
+    /// Enable or disable inline keyboards on outbound messages (`reply_markup`).
+    pub fn with_inline_buttons(mut self, enabled: bool) -> Self {
+        self.enable_inline_buttons = enabled;
+        self
     }
 
     /// Configure whether Telegram-native acknowledgement reactions are sent.
@@ -688,7 +696,10 @@ impl TelegramChannel {
             .json()
             .await
             .unwrap_or_else(|_| serde_json::json!({ "ok": false, "description": "invalid json" }));
-        let ok = data.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let ok = data
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         if !ok || !status.is_success() {
             let desc = data
                 .get("description")
@@ -1826,11 +1837,161 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             .replace('\'', "&#39;")
     }
 
+    fn reply_markup_value(markup: &InlineKeyboardMarkup) -> anyhow::Result<serde_json::Value> {
+        let mut rows_json = Vec::new();
+        for row in &markup.0 {
+            let mut btns = Vec::new();
+            for b in &row.0 {
+                let mut o = serde_json::Map::new();
+                o.insert(
+                    "text".to_string(),
+                    serde_json::Value::String(b.text.clone()),
+                );
+                match (&b.callback_data, &b.url) {
+                    (Some(cb), None) => {
+                        anyhow::ensure!(
+                            cb.len() <= TELEGRAM_CALLBACK_DATA_MAX_BYTES,
+                            "Telegram callback_data exceeds {} bytes",
+                            TELEGRAM_CALLBACK_DATA_MAX_BYTES
+                        );
+                        o.insert(
+                            "callback_data".to_string(),
+                            serde_json::Value::String(cb.clone()),
+                        );
+                    }
+                    (None, Some(url)) => {
+                        o.insert("url".to_string(), serde_json::Value::String(url.clone()));
+                    }
+                    (None, None) => {
+                        anyhow::bail!("inline keyboard button requires callback_data or url");
+                    }
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!(
+                            "inline keyboard button cannot set both callback_data and url"
+                        );
+                    }
+                }
+                btns.push(serde_json::Value::Object(o));
+            }
+            rows_json.push(serde_json::Value::Array(btns));
+        }
+        Ok(serde_json::json!({ "inline_keyboard": rows_json }))
+    }
+
+    fn merge_reply_markup_into_body(
+        body: &mut serde_json::Value,
+        markup: Option<&InlineKeyboardMarkup>,
+    ) -> anyhow::Result<()> {
+        let Some(m) = markup else {
+            return Ok(());
+        };
+        body["reply_markup"] = Self::reply_markup_value(m)?;
+        Ok(())
+    }
+
+    async fn answer_callback_query_api(&self, callback_query_id: &str) {
+        let body = serde_json::json!({
+            "callback_query_id": callback_query_id,
+        });
+        let _ = self
+            .http_client()
+            .post(self.api_url("answerCallbackQuery"))
+            .json(&body)
+            .send()
+            .await;
+    }
+
+    async fn strip_message_inline_keyboard(
+        &self,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        message_id: i64,
+    ) {
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": serde_json::json!({ "inline_keyboard": [] }),
+        });
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::Value::String(tid.to_string());
+        }
+        let _ = self
+            .http_client()
+            .post(self.api_url("editMessageReplyMarkup"))
+            .json(&body)
+            .send()
+            .await;
+    }
+
+    async fn dispatch_callback_query_update(&self, update: &serde_json::Value) -> bool {
+        let Some(cb) = update.get("callback_query") else {
+            return false;
+        };
+
+        let Some(callback_query_id) = cb.get("id").and_then(serde_json::Value::as_str) else {
+            return true;
+        };
+
+        let data = cb
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        let Some(message) = cb.get("message") else {
+            self.answer_callback_query_api(callback_query_id).await;
+            return true;
+        };
+
+        let Some(chat_id) = message
+            .get("chat")
+            .and_then(|c| c.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+        else {
+            self.answer_callback_query_api(callback_query_id).await;
+            return true;
+        };
+
+        let thread_id = message
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+
+        let message_id = message
+            .get("message_id")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+
+        let (username, sender_id, _) = Self::extract_sender_info(cb);
+        let mut identities = vec![username.as_str()];
+        if let Some(id) = sender_id.as_deref() {
+            identities.push(id);
+        }
+        if !self.is_any_user_allowed(identities.iter().copied()) {
+            self.answer_callback_query_api(callback_query_id).await;
+            return true;
+        }
+
+        self.answer_callback_query_api(callback_query_id).await;
+
+        let tid_ref = thread_id.as_deref();
+        if self
+            .pending_ask
+            .complete_choice_callback(&chat_id, tid_ref, data)
+        {
+            self.strip_message_inline_keyboard(&chat_id, tid_ref, message_id)
+                .await;
+        }
+
+        true
+    }
+
     async fn send_text_chunks(
         &self,
         message: &str,
         chat_id: &str,
         thread_id: Option<&str>,
+        reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> anyhow::Result<()> {
         let chunks = split_message_for_telegram(message);
 
@@ -1847,6 +2008,12 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                 chunk.to_string()
             };
 
+            let markup_on_chunk = if index + 1 == chunks.len() {
+                reply_markup
+            } else {
+                None
+            };
+
             let mut markdown_body = serde_json::json!({
                 "chat_id": chat_id,
                 "text": Self::markdown_to_telegram_html(&text),
@@ -1857,6 +2024,8 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             if let Some(tid) = thread_id {
                 markdown_body["message_thread_id"] = serde_json::Value::String(tid.to_string());
             }
+
+            Self::merge_reply_markup_into_body(&mut markdown_body, markup_on_chunk)?;
 
             let markdown_resp = self
                 .http_client()
@@ -1888,6 +2057,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             if let Some(tid) = thread_id {
                 plain_body["message_thread_id"] = serde_json::Value::String(tid.to_string());
             }
+
+            Self::merge_reply_markup_into_body(&mut plain_body, markup_on_chunk)?;
+
             let plain_resp = self
                 .http_client()
                 .post(self.api_url("sendMessage"))
@@ -2002,7 +2174,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
                     TelegramAttachmentKind::Voice => "Voice",
                 };
                 let fallback_text = format!("{kind_label}: {target}");
-                self.send_text_chunks(&fallback_text, chat_id, thread_id)
+                self.send_text_chunks(&fallback_text, chat_id, thread_id, None)
                     .await?;
             }
 
@@ -2459,6 +2631,14 @@ impl Channel for TelegramChannel {
         self.stream_mode != StreamMode::Off
     }
 
+    fn supports_inline_keyboards(&self) -> bool {
+        self.enable_inline_buttons
+    }
+
+    fn telegram_pending_ask_registry(&self) -> Option<Arc<TelegramPendingAskRegistry>> {
+        Some(Arc::clone(&self.pending_ask))
+    }
+
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
         if self.stream_mode == StreamMode::Off {
             return Ok(None);
@@ -2477,6 +2657,9 @@ impl Channel for TelegramChannel {
         });
         if let Some(tid) = thread_id {
             body["message_thread_id"] = serde_json::Value::String(tid.to_string());
+        }
+        if self.enable_inline_buttons {
+            Self::merge_reply_markup_into_body(&mut body, message.reply_markup.as_ref())?;
         }
 
         let resp = self
@@ -2615,7 +2798,7 @@ impl Channel for TelegramChannel {
 
             // Send text without markers
             if !text_without_markers.is_empty() {
-                self.send_text_chunks(&text_without_markers, &chat_id, thread_id.as_deref())
+                self.send_text_chunks(&text_without_markers, &chat_id, thread_id.as_deref(), None)
                     .await?;
             }
 
@@ -2644,13 +2827,13 @@ impl Channel for TelegramChannel {
 
             // Fall back to chunked send
             return self
-                .send_text_chunks(text, &chat_id, thread_id.as_deref())
+                .send_text_chunks(text, &chat_id, thread_id.as_deref(), None)
                 .await;
         }
 
         let Some(id) = msg_id else {
             return self
-                .send_text_chunks(text, &chat_id, thread_id.as_deref())
+                .send_text_chunks(text, &chat_id, thread_id.as_deref(), None)
                 .await;
         };
 
@@ -2715,7 +2898,7 @@ impl Channel for TelegramChannel {
 
         match delete_resp {
             Ok(resp) if resp.status().is_success() => {
-                self.send_text_chunks(text, &chat_id, thread_id.as_deref())
+                self.send_text_chunks(text, &chat_id, thread_id.as_deref(), None)
                     .await
             }
             Ok(resp) => {
@@ -2855,9 +3038,20 @@ impl Channel for TelegramChannel {
         // Always send text reply (voice chat gets both text and voice)
         let (text_without_markers, attachments) = parse_attachment_markers(&content);
 
+        let outbound_markup = if self.enable_inline_buttons {
+            message.reply_markup.as_ref()
+        } else {
+            None
+        };
+
         if !attachments.is_empty() {
+            if outbound_markup.is_some() {
+                tracing::warn!(
+                    "Telegram: reply_markup was omitted because the message includes attachments"
+                );
+            }
             if !text_without_markers.is_empty() {
-                self.send_text_chunks(&text_without_markers, chat_id, thread_id)
+                self.send_text_chunks(&text_without_markers, chat_id, thread_id, None)
                     .await?;
             }
 
@@ -2869,12 +3063,16 @@ impl Channel for TelegramChannel {
         }
 
         if let Some(attachment) = parse_path_only_attachment(&content) {
+            if outbound_markup.is_some() {
+                tracing::warn!("Telegram: reply_markup was omitted for path-only attachment send");
+            }
             self.send_attachment(chat_id, thread_id, &attachment)
                 .await?;
             return Ok(());
         }
 
-        self.send_text_chunks(&content, chat_id, thread_id).await
+        self.send_text_chunks(&content, chat_id, thread_id, outbound_markup)
+            .await
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
@@ -2896,7 +3094,7 @@ impl Channel for TelegramChannel {
             let probe = serde_json::json!({
                 "offset": offset,
                 "timeout": 0,
-                "allowed_updates": ["message"]
+                "allowed_updates": ["message", "callback_query"]
             });
             match self.http_client().post(&url).json(&probe).send().await {
                 Err(e) => {
@@ -2972,7 +3170,7 @@ impl Channel for TelegramChannel {
             let body = serde_json::json!({
                 "offset": offset,
                 "timeout": 30,
-                "allowed_updates": ["message"]
+                "allowed_updates": ["message", "callback_query"]
             });
 
             let resp = match self.http_client().post(&url).json(&body).send().await {
@@ -3033,6 +3231,10 @@ Ensure only one `zeroclaw` process is using this bot token."
                         offset = uid + 1;
                     }
 
+                    if self.dispatch_callback_query_update(update).await {
+                        continue;
+                    }
+
                     let msg = if let Some(m) = self.parse_update_message(update) {
                         m
                     } else if let Some(m) = self.try_parse_voice_message(update).await {
@@ -3043,6 +3245,21 @@ Ensure only one `zeroclaw` process is using this bot token."
                         Box::pin(self.handle_unauthorized_message(update)).await;
                         continue;
                     };
+
+                    let (pending_chat, pending_thread) =
+                        Self::parse_reply_target(&msg.reply_target);
+                    let pending_thread_ref = pending_thread.as_deref();
+                    if self.pending_ask.try_complete_choice_with_text(
+                        &pending_chat,
+                        pending_thread_ref,
+                        &msg.content,
+                    ) || self.pending_ask.try_complete_open_message(
+                        &pending_chat,
+                        pending_thread_ref,
+                        &msg.content,
+                    ) {
+                        continue;
+                    }
 
                     if self.ack_reactions {
                         if let Some((reaction_chat_id, reaction_message_id)) =
@@ -3133,11 +3350,25 @@ Ensure only one `zeroclaw` process is using this bot token."
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::traits::{InlineKeyboardButton, InlineKeyboardRow};
 
     #[test]
     fn telegram_channel_name() {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
         assert_eq!(ch.name(), "telegram");
+    }
+
+    #[test]
+    fn reply_markup_value_builds_inline_keyboard_json() {
+        let markup = InlineKeyboardMarkup(vec![InlineKeyboardRow(vec![InlineKeyboardButton {
+            text: "OK".into(),
+            callback_data: Some("z0123456789abcdef01".into()),
+            url: None,
+        }])]);
+        let v = TelegramChannel::reply_markup_value(&markup).unwrap();
+        let rows = v["inline_keyboard"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].as_array().unwrap()[0]["text"], "OK");
     }
 
     #[test]

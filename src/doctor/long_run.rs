@@ -24,7 +24,10 @@ fn bump_score(current: Score, bump: Score) -> Score {
 }
 
 fn age_secs(mtime: SystemTime) -> Option<u64> {
-    SystemTime::now().duration_since(mtime).ok().map(|d| d.as_secs())
+    SystemTime::now()
+        .duration_since(mtime)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 fn fmt_age(secs: Option<u64>) -> String {
@@ -92,10 +95,15 @@ pub async fn run(config: &Config, hand_filter: Option<&str>) -> Result<()> {
         if let Some(t) = dm {
             let a = age_secs(t);
             println!("      decisions.md mtime age: {}", fmt_age(a));
-            if !matches!(hand.coordinator_mode, crate::hands::CoordinatorMode::Disabled) {
+            if !matches!(
+                hand.coordinator_mode,
+                crate::hands::CoordinatorMode::Disabled
+            ) {
                 if a.map(|s| s > 86_400).unwrap_or(false) {
                     score = bump_score(score, Score::Yellow);
-                    rec.push("Scratchpad decisions look stale for an active coordinator hand.".into());
+                    rec.push(
+                        "Scratchpad decisions look stale for an active coordinator hand.".into(),
+                    );
                 }
             }
         } else if matches!(
@@ -129,8 +137,8 @@ pub async fn run(config: &Config, hand_filter: Option<&str>) -> Result<()> {
             println!("    layered_memory: disabled (index n/a)");
         }
 
-        let boundary_ok = crate::hands::coordinator::probe_hand_prompt_cache_boundary(config, hand)
-            .await;
+        let boundary_ok =
+            crate::hands::coordinator::probe_hand_prompt_cache_boundary(config, hand).await;
         match boundary_ok {
             Ok(true) => println!("    static/dynamic boundary: present in assembled hand prompt"),
             Ok(false) => {

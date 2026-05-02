@@ -841,6 +841,7 @@ mod tests {
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
         assert!(has_supervised_channels(&config));
     }
@@ -963,6 +964,7 @@ mod tests {
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
 
         let target = resolve_heartbeat_delivery(&config).unwrap();
@@ -983,6 +985,7 @@ mod tests {
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
 
         let target = resolve_heartbeat_delivery(&config).unwrap();

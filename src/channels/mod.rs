@@ -47,6 +47,7 @@ pub mod session_store;
 pub mod signal;
 pub mod slack;
 pub mod telegram;
+pub mod telegram_pending;
 pub mod traits;
 pub mod transcription;
 pub mod tts;
@@ -88,7 +89,10 @@ pub use reddit::RedditChannel;
 pub use signal::SignalChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
-pub use traits::{Channel, SendMessage};
+#[allow(unused_imports)]
+pub use traits::{
+    Channel, InlineKeyboardButton, InlineKeyboardMarkup, InlineKeyboardRow, SendMessage,
+};
 #[allow(unused_imports)]
 pub use tts::{TtsManager, TtsProvider};
 pub use twitter::TwitterChannel;
@@ -724,14 +728,16 @@ fn strip_tool_summary_prefix(text: &str) -> String {
 
 fn parse_runtime_command(channel_name: &str, content: &str) -> Option<ChannelRuntimeCommand> {
     use runtime_slash::ParsedRuntimeSlash as P;
-    Some(match runtime_slash::parse_runtime_slash(channel_name, content)? {
-        P::ShowProviders => ChannelRuntimeCommand::ShowProviders,
-        P::SetProvider(s) => ChannelRuntimeCommand::SetProvider(s),
-        P::ShowModel => ChannelRuntimeCommand::ShowModel,
-        P::SetModel(s) => ChannelRuntimeCommand::SetModel(s),
-        P::ShowConfig => ChannelRuntimeCommand::ShowConfig,
-        P::NewSession => ChannelRuntimeCommand::NewSession,
-    })
+    Some(
+        match runtime_slash::parse_runtime_slash(channel_name, content)? {
+            P::ShowProviders => ChannelRuntimeCommand::ShowProviders,
+            P::SetProvider(s) => ChannelRuntimeCommand::SetProvider(s),
+            P::ShowModel => ChannelRuntimeCommand::ShowModel,
+            P::SetModel(s) => ChannelRuntimeCommand::SetModel(s),
+            P::ShowConfig => ChannelRuntimeCommand::ShowConfig,
+            P::NewSession => ChannelRuntimeCommand::NewSession,
+        },
+    )
 }
 
 fn resolved_default_provider(config: &Config) -> String {
@@ -1607,8 +1613,11 @@ async fn handle_control_hub_command_if_needed(
     msg: &traits::ChannelMessage,
     target_channel: Option<&Arc<dyn Channel>>,
 ) -> bool {
-    if !control_hub::telegram_control_hub_should_handle(ctx.prompt_config.as_ref(), &msg.channel, &msg.content)
-    {
+    if !control_hub::telegram_control_hub_should_handle(
+        ctx.prompt_config.as_ref(),
+        &msg.channel,
+        &msg.content,
+    ) {
         return false;
     }
 
@@ -3627,7 +3636,8 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 .with_transcription(config.transcription.clone())
                 .with_tts(config.tts.clone())
                 .with_workspace_dir(config.workspace_dir.clone())
-                .with_command_sync_config(std::sync::Arc::new(config.clone())),
+                .with_command_sync_config(std::sync::Arc::new(config.clone()))
+                .with_inline_buttons(tg.enable_inline_buttons),
             ))
         }
         "discord" => {
@@ -3733,7 +3743,8 @@ fn collect_configured_channels(
                 .with_tts(config.tts.clone())
                 .with_workspace_dir(config.workspace_dir.clone())
                 .with_proxy_url(tg.proxy_url.clone())
-                .with_command_sync_config(std::sync::Arc::new(config.clone())),
+                .with_command_sync_config(std::sync::Arc::new(config.clone()))
+                .with_inline_buttons(tg.enable_inline_buttons),
             ),
         });
     }
@@ -10021,6 +10032,7 @@ This is an example JSON object for profile settings."#;
             proxy_url: None,
             control_hub_enabled: false,
             control_hub_prefix: "z".into(),
+            enable_inline_buttons: true,
         });
         match build_channel_by_id(&config, "telegram") {
             Ok(channel) => assert_eq!(channel.name(), "telegram"),

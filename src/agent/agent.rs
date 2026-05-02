@@ -451,9 +451,7 @@ impl Agent {
         {
             return true;
         }
-        if lower.contains("refresh ")
-            && (lower.contains("workspace") || lower.contains("file"))
-        {
+        if lower.contains("refresh ") && (lower.contains("workspace") || lower.contains("file")) {
             return true;
         }
         false
@@ -522,21 +520,21 @@ impl Agent {
             _ask_user_handle,
             _shell_engine,
         ) = tools::all_tools_with_runtime(
-                Arc::new(config.clone()),
-                &security,
-                runtime,
-                memory.clone(),
-                composio_key,
-                composio_entity_id,
-                &config.browser,
-                &config.http_request,
-                &config.web_fetch,
-                &config.workspace_dir,
-                &config.agents,
-                config.api_key.as_deref(),
-                config,
-                None,
-            );
+            Arc::new(config.clone()),
+            &security,
+            runtime,
+            memory.clone(),
+            composio_key,
+            composio_entity_id,
+            &config.browser,
+            &config.http_request,
+            &config.web_fetch,
+            &config.workspace_dir,
+            &config.agents,
+            config.api_key.as_deref(),
+            config,
+            None,
+        );
 
         // ── Wire MCP tools (non-fatal) ─────────────────────────────
         // Replicates the same MCP initialization logic used in the CLI
@@ -955,7 +953,9 @@ impl Agent {
             || self.config.refresh_system_prompt_from_disk_each_turn
         {
             let prev = match self.history.first() {
-                Some(ConversationMessage::Chat(c)) if c.role == "system" => Some(c.content.as_str()),
+                Some(ConversationMessage::Chat(c)) if c.role == "system" => {
+                    Some(c.content.as_str())
+                }
                 _ => None,
             };
             let new_sys = self.build_system_prompt(layered_ref)?;
@@ -1267,7 +1267,9 @@ impl Agent {
             || self.config.refresh_system_prompt_from_disk_each_turn
         {
             let prev = match self.history.first() {
-                Some(ConversationMessage::Chat(c)) if c.role == "system" => Some(c.content.as_str()),
+                Some(ConversationMessage::Chat(c)) if c.role == "system" => {
+                    Some(c.content.as_str())
+                }
                 _ => None,
             };
             let new_sys = self.build_system_prompt(layered_ref)?;
@@ -2064,12 +2066,20 @@ mod tests {
 
     #[test]
     fn bypass_response_cache_for_read_like_prompts() {
-        assert!(Agent::bypass_response_cache_for_workspace_read_intent("read ok.md"));
-        assert!(Agent::bypass_response_cache_for_workspace_read_intent("/read x"));
-        assert!(Agent::bypass_response_cache_for_workspace_read_intent("/refresh"));
+        assert!(Agent::bypass_response_cache_for_workspace_read_intent(
+            "read ok.md"
+        ));
+        assert!(Agent::bypass_response_cache_for_workspace_read_intent(
+            "/read x"
+        ));
+        assert!(Agent::bypass_response_cache_for_workspace_read_intent(
+            "/refresh"
+        ));
         assert!(Agent::bypass_response_cache_for_workspace_read_intent(
             "refresh workspace files"
         ));
-        assert!(!Agent::bypass_response_cache_for_workspace_read_intent("hello world"));
+        assert!(!Agent::bypass_response_cache_for_workspace_read_intent(
+            "hello world"
+        ));
     }
 }

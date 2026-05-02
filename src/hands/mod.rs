@@ -46,7 +46,8 @@ pub fn load_hand(hands_dir: &Path, name: &str) -> Result<Hand> {
     let path = hands_dir.join(format!("{name}.toml"));
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read hand file: {}", path.display()))?;
-    toml::from_str(&content).with_context(|| format!("failed to parse hand file: {}", path.display()))
+    toml::from_str(&content)
+        .with_context(|| format!("failed to parse hand file: {}", path.display()))
 }
 
 /// Load the rolling context for a hand.

@@ -59,13 +59,7 @@ fn scratchpad_parent_summary(
         let p = scratchpad.join(rel);
         if p.exists() {
             if let Ok(meta) = std::fs::metadata(&p) {
-                let _ = writeln!(
-                    &mut s,
-                    "- `{}/{}` ({} bytes)",
-                    sp,
-                    rel,
-                    meta.len()
-                );
+                let _ = writeln!(&mut s, "- `{}/{}` ({} bytes)", sp, rel, meta.len());
             } else {
                 let _ = writeln!(&mut s, "- `{sp}/{rel}`");
             }
@@ -229,7 +223,10 @@ fn assemble_hand_system_prompt(
 }
 
 /// For `zeroclaw doctor long-run`: verify assembled hand system prompt contains the Phase 1 cache boundary marker.
-pub async fn probe_hand_prompt_cache_boundary(config: &Config, hand: &Hand) -> anyhow::Result<bool> {
+pub async fn probe_hand_prompt_cache_boundary(
+    config: &Config,
+    hand: &Hand,
+) -> anyhow::Result<bool> {
     let agent = crate::agent::Agent::from_config(config).await?;
     let sp = assemble_hand_system_prompt(config, &agent, hand, None)?;
     Ok(sp
@@ -386,10 +383,7 @@ pub async fn run_coordinator_hand(
         if let Some(s) = query_engine::peek_session_memory_summary() {
             let digest: String = s.summary_text.chars().take(160).collect();
             if !digest.trim().is_empty() {
-                append_decision(
-                    &scratchpad,
-                    &format!("post_turn_memory_digest: {digest}"),
-                )?;
+                append_decision(&scratchpad, &format!("post_turn_memory_digest: {digest}"))?;
             }
         }
         return Ok(out.final_text);
@@ -483,28 +477,19 @@ pub async fn run_coordinator_hand(
         if let Some(s) = query_engine::peek_session_memory_summary() {
             let digest: String = s.summary_text.chars().take(160).collect();
             if !digest.trim().is_empty() {
-                append_decision(
-                    &scratchpad,
-                    &format!("post_turn_memory_digest: {digest}"),
-                )?;
+                append_decision(&scratchpad, &format!("post_turn_memory_digest: {digest}"))?;
             }
         }
 
         if *phase == "research" && out.final_text.trim().is_empty() {
-            append_decision(
-                &scratchpad,
-                "gate research_empty pipeline_halt",
-            )?;
+            append_decision(&scratchpad, "gate research_empty pipeline_halt")?;
             bail!("research phase produced empty output; see scratchpad/decisions.md");
         }
 
         if *phase == "verification" {
             match scan_verification_status(&out.final_text) {
                 Some(false) => {
-                    append_decision(
-                        &scratchpad,
-                        "gate verification STATUS:FAIL pipeline_halt",
-                    )?;
+                    append_decision(&scratchpad, "gate verification STATUS:FAIL pipeline_halt")?;
                     bail!("verification phase reported STATUS: FAIL; see scratchpad/decisions.md");
                 }
                 None => {
@@ -569,7 +554,10 @@ mod tests {
 
     #[test]
     fn scan_verification_status_ignores_notfail_substring() {
-        assert_eq!(scan_verification_status("NOTFAIL is not a status line\n"), None);
+        assert_eq!(
+            scan_verification_status("NOTFAIL is not a status line\n"),
+            None
+        );
     }
 
     #[test]

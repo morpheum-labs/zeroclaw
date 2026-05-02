@@ -1,9 +1,9 @@
 //! Shell tool — delegates to [`crate::shell::ShellEngine`].
 
 use super::traits::{Tool, ToolResult};
-use crate::shell::ShellEngine;
 use crate::security::traits::Sandbox;
 use crate::security::SecurityPolicy;
+use crate::shell::ShellEngine;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -19,7 +19,10 @@ impl ShellTool {
         Self { engine }
     }
 
-    pub fn new(security: Arc<SecurityPolicy>, runtime: Arc<dyn crate::runtime::RuntimeAdapter>) -> Self {
+    pub fn new(
+        security: Arc<SecurityPolicy>,
+        runtime: Arc<dyn crate::runtime::RuntimeAdapter>,
+    ) -> Self {
         let shell = crate::config::ShellSection::default();
         let sandbox = Arc::new(crate::security::NoopSandbox);
         let engine = ShellEngine::new(shell, security, runtime, sandbox)
